@@ -6,6 +6,10 @@ import StrategyDetail from './StrategyDetail';
 import ModelDetail from './ModelDetail';
 import UserManagement from './UserManagement';
 import Header from './components/Header';
+import { AuthProvider } from './components/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
+import AuthModal from './components/AuthModal';
+import Account from './Account';
 import './App.css';
 
 // Strategy List Component
@@ -1233,13 +1237,309 @@ function ModelsList() {
   );
 }
 
+// Home Component
+function Home() {
+  const [stats, setStats] = useState({ strategyCount: 0, modelCount: 0, profitableStrategies: 0 });
+  const [showAuth, setShowAuth] = useState(false);
+  const [authMode, setAuthMode] = useState('login');
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [loadingStats, setLoadingStats] = useState(true);
+  const [statsError, setStatsError] = useState(null);
+
+  const fetchRealtimeStats = useCallback(async () => {
+    try {
+      setStatsError(null);
+      const [strategiesRes, modelsRes] = await Promise.all([
+        axios.get('/api/strategies'),
+        axios.get('/api/models')
+      ]);
+
+      const strategies = (strategiesRes.data && strategiesRes.data.data) || [];
+      const models = (modelsRes.data && (modelsRes.data.data || modelsRes.data)) || [];
+      const profitable = strategies.filter((s) => (s.performance?.profitLoss ?? 0) > 0).length;
+
+      setStats({
+        strategyCount: strategies.length,
+        modelCount: models.length,
+        profitableStrategies: profitable
+      });
+      setLastUpdated(new Date());
+    } catch (e) {
+      setStatsError('Live stats unavailable. Please ensure the server is running.');
+      // still set timestamp to indicate attempted refresh
+      setLastUpdated(new Date());
+    } finally {
+      setLoadingStats(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRealtimeStats();
+    const intervalId = setInterval(fetchRealtimeStats, 30000);
+    return () => clearInterval(intervalId);
+  }, [fetchRealtimeStats]);
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Header activePage="home" />
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        {/* Hero */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-10 mb-8">
+          <div className="text-center">
+            <p className="text-lg text-gray-600 max-w-3xl mx-auto">
+              Aegis helps new and busy traders act with confidence. No need to master indicators or AI—
+              just pick a market and timeframe, compare strategies, and optionally enable ML models for
+              more robust signals.
+            </p>
+            <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
+              <Link
+                to="/simulator"
+                className="px-6 py-3 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition-shadow shadow-sm hover:shadow"
+              >
+                Explore Simulator
+              </Link>
+              <Link
+                to="/models"
+                className="px-6 py-3 rounded-lg bg-white text-blue-700 font-semibold border border-blue-200 hover:bg-blue-50 transition-shadow shadow-sm hover:shadow"
+              >
+                Browse ML Models
+              </Link>
+              <button
+                onClick={() => { setAuthMode('signup'); setShowAuth(true); }}
+                className="px-6 py-3 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 transition-shadow shadow-sm hover:shadow"
+              >
+                Get Started
+              </button>
+            </div>
+          </div>
+          {/* Live Stats */}
+          <div className="mt-10">
+            {statsError && (
+              <div className="text-xs text-red-600 mb-3">{statsError}</div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-gray-50 rounded-lg border border-gray-200 p-5">
+                <div className="text-xs uppercase tracking-wide text-gray-600">Strategies</div>
+                <div className="mt-1 text-2xl font-extrabold text-gray-900">{stats.strategyCount}</div>
+                <div className="mt-1 text-xs text-gray-500">Total strategies tracked</div>
+              </div>
+              <div className="bg-gray-50 rounded-lg border border-gray-200 p-5">
+                <div className="text-xs uppercase tracking-wide text-gray-600">Profitable</div>
+                <div className="mt-1 text-2xl font-extrabold text-green-600">{stats.profitableStrategies}</div>
+                <div className="mt-1 text-xs text-gray-500">Strategies with positive P&L</div>
+              </div>
+              <div className="bg-gray-50 rounded-lg border border-gray-200 p-5">
+                <div className="text-xs uppercase tracking-wide text-gray-600">Models</div>
+                <div className="mt-1 text-2xl font-extrabold text-gray-900">{stats.modelCount}</div>
+                <div className="mt-1 text-xs text-gray-500">ML models available</div>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-10">
+            <div className="text-center">
+              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-3">
+                <BarChart3 className="w-6 h-6 text-blue-600" />
+              </div>
+              <h3 className="text-sm font-semibold text-gray-900 mb-1">Strategy Analytics</h3>
+              <p className="text-xs text-gray-600">Filter, sort, and drill into P&L and behavior</p>
+            </div>
+            <div className="text-center">
+              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-3">
+                <Brain className="w-6 h-6 text-purple-600" />
+              </div>
+              <h3 className="text-sm font-semibold text-gray-900 mb-1">ML Insights</h3>
+              <p className="text-xs text-gray-600">Compare models, horizons, symbols, and exchanges</p>
+            </div>
+            <div className="text-center">
+              <div className="w-12 h-12 bg-cyan-100 rounded-lg flex items-center justify-center mx-auto mb-3">
+                <Users className="w-6 h-6 text-cyan-600" />
+              </div>
+              <h3 className="text-sm font-semibold text-gray-900 mb-1">Operational Control</h3>
+              <p className="text-xs text-gray-600">Manage users, access, and organization settings</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Overview Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-base font-semibold text-gray-900">What you can do</h3>
+            <ul className="mt-3 space-y-2 text-sm text-gray-700 list-disc list-inside">
+              <li>Inspect strategy performance with sortable, paginated tables</li>
+              <li>Slice results by exchange, symbol, and timeframe</li>
+              <li>Open detailed pages for deeper diagnostics</li>
+            </ul>
+          </div>
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-base font-semibold text-gray-900">Model analytics</h3>
+            <ul className="mt-3 space-y-2 text-sm text-gray-700 list-disc list-inside">
+              <li>Compare ML models by final P&L and stability</li>
+              <li>Toggle table and card views for faster scanning</li>
+              <li>Focus on specific assets and horizons</li>
+            </ul>
+          </div>
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-base font-semibold text-gray-900">Administration</h3>
+            <ul className="mt-3 space-y-2 text-sm text-gray-700 list-disc list-inside">
+              <li>Manage users and roles securely</li>
+              <li>Align access with operational processes</li>
+              <li>Keep data access auditable and organized</li>
+            </ul>
+          </div>
+        </div>
+
+        {/* How it works */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+          <h2 className="text-2xl font-bold text-gray-900 text-center">How it works</h2>
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="border border-gray-200 rounded-lg p-6">
+              <div className="text-sm font-semibold text-blue-700">1) See strategies by market</div>
+              <p className="mt-2 text-sm text-gray-700">Browse strategies by exchange, symbol, and time horizon that fit your schedule.</p>
+            </div>
+            <div className="border border-gray-200 rounded-lg p-6">
+              <div className="text-sm font-semibold text-blue-700">2) Pick by P&L or enable AI</div>
+              <p className="mt-2 text-sm text-gray-700">Choose the best strategy using P&L and other factors. Optionally turn on AI models for more robust signals.</p>
+            </div>
+            <div className="border border-gray-200 rounded-lg p-6">
+              <div className="text-sm font-semibold text-blue-700">3) Connect and we handle the rest</div>
+              <p className="mt-2 text-sm text-gray-700">Add your exchange API key and secret—signals and execution are handled end to end for you.</p>
+            </div>
+          </div>
+          <div className="mt-8 text-center">
+            <Link to="/simulator" className="px-5 py-3 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition-shadow shadow-sm hover:shadow">
+              Get started
+            </Link>
+          </div>
+        </div>
+
+        {/* Quick Start Guide for new and busy traders */}
+        <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            <h2 className="text-2xl font-bold text-gray-900">Quick start</h2>
+            <ol className="mt-4 space-y-4 list-decimal list-inside text-sm text-gray-700">
+              <li>
+                Open the <Link to="/simulator" className="text-blue-600 hover:text-blue-800 font-medium">Simulator</Link> and choose your symbol, exchange, and timeframe.
+              </li>
+              <li>
+                Sort by P&L to spot top performers, then open a strategy row to view details.
+              </li>
+              <li>
+                Want stronger signals? Head to <Link to="/models" className="text-blue-600 hover:text-blue-800 font-medium">Models</Link> and select AI models tuned for your market.
+              </li>
+              <li>
+                Use the chosen strategy or ML model’s signals to plan entries/exits—no complex setup required.
+              </li>
+            </ol>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Link to="/simulator" className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">Open Simulator</Link>
+              <Link to="/models" className="px-4 py-2 rounded-md border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50">Open Models</Link>
+            </div>
+          </div>
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            <h2 className="text-2xl font-bold text-gray-900">Designed for</h2>
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm text-gray-700">
+              <div className="border border-gray-200 rounded-lg p-4">
+                <div className="font-semibold text-gray-900">New traders</div>
+                <p className="mt-1">Skip the complexity. Use ranked strategies and AI models to get actionable signals fast.</p>
+              </div>
+              <div className="border border-gray-200 rounded-lg p-4">
+                <div className="font-semibold text-gray-900">Busy professionals</div>
+                <p className="mt-1">Spend minutes, not hours. Filter by timeframe and symbol, then act on the best options.</p>
+              </div>
+              <div className="border border-gray-200 rounded-lg p-4">
+                <div className="font-semibold text-gray-900">Signal-first workflows</div>
+                <p className="mt-1">Generate and review signals in one place—consistent layouts across pages.</p>
+              </div>
+              <div className="border border-gray-200 rounded-lg p-4">
+                <div className="font-semibold text-gray-900">Confidence and clarity</div>
+                <p className="mt-1">Clear P&L, filters, and details help you decide without guesswork.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* FAQ */}
+        <div className="mt-8 bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+          <h2 className="text-2xl font-bold text-gray-900">FAQ</h2>
+          <div className="mt-4 divide-y divide-gray-200">
+            <details className="py-4 group">
+              <summary className="cursor-pointer font-semibold text-gray-900 flex items-center justify-between">
+                Are my API keys and credentials safe?
+                <span className="text-blue-600 text-sm group-open:hidden">Show</span>
+                <span className="text-blue-600 text-sm hidden group-open:inline">Hide</span>
+              </summary>
+              <p className="mt-2 text-sm text-gray-700">We only use your API key and secret to communicate with your exchange for signal execution. Keys are never shared with third parties.</p>
+            </details>
+            <details className="py-4 group">
+              <summary className="cursor-pointer font-semibold text-gray-900 flex items-center justify-between">
+                How are API keys stored and used?
+                <span className="text-blue-600 text-sm group-open:hidden">Show</span>
+                <span className="text-blue-600 text-sm hidden group-open:inline">Hide</span>
+              </summary>
+              <p className="mt-2 text-sm text-gray-700">Keys are stored server-side and used only to place authenticated requests to your exchange based on your selected strategies/models.</p>
+            </details>
+            <details className="py-4 group">
+              <summary className="cursor-pointer font-semibold text-gray-900 flex items-center justify-between">
+                What permissions should I grant?
+                <span className="text-blue-600 text-sm group-open:hidden">Show</span>
+                <span className="text-blue-600 text-sm hidden group-open:inline">Hide</span>
+              </summary>
+              <p className="mt-2 text-sm text-gray-700">Grant trade permissions only. Do not enable withdrawal access on your exchange API keys.</p>
+            </details>
+            <details className="py-4 group">
+              <summary className="cursor-pointer font-semibold text-gray-900 flex items-center justify-between">
+                Can I revoke access at any time?
+                <span className="text-blue-600 text-sm group-open:hidden">Show</span>
+                <span className="text-blue-600 text-sm hidden group-open:inline">Hide</span>
+              </summary>
+              <p className="mt-2 text-sm text-gray-700">Yes. Delete or disable your API key on the exchange dashboard to immediately revoke access.</p>
+            </details>
+            <details className="py-4 group">
+              <summary className="cursor-pointer font-semibold text-gray-900 flex items-center justify-between">
+                Do you place trades automatically?
+                <span className="text-blue-600 text-sm group-open:hidden">Show</span>
+                <span className="text-blue-600 text-sm hidden group-open:inline">Hide</span>
+              </summary>
+              <p className="mt-2 text-sm text-gray-700">Signals are generated by your selected strategies or AI models. If execution is enabled with valid API keys, orders can be placed automatically according to those signals.</p>
+            </details>
+            <details className="py-4 group">
+              <summary className="cursor-pointer font-semibold text-gray-900 flex items-center justify-between">
+                What are the costs or fees?
+                <span className="text-blue-600 text-sm group-open:hidden">Show</span>
+                <span className="text-blue-600 text-sm hidden group-open:inline">Hide</span>
+              </summary>
+              <p className="mt-2 text-sm text-gray-700">You pay your normal exchange fees. Platform pricing, if applicable, is shown during onboarding or billing.</p>
+            </details>
+            <details className="py-4 group">
+              <summary className="cursor-pointer font-semibold text-gray-900 flex items-center justify-between">
+                What data do you collect?
+                <span className="text-blue-600 text-sm group-open:hidden">Show</span>
+                <span className="text-blue-600 text-sm hidden group-open:inline">Hide</span>
+              </summary>
+              <p className="mt-2 text-sm text-gray-700">We collect strategy/model performance and operational metadata to improve reliability. We do not sell your data.</p>
+            </details>
+            <details className="py-4 group">
+              <summary className="cursor-pointer font-semibold text-gray-900 flex items-center justify-between">
+                How can I get support?
+                <span className="text-blue-600 text-sm group-open:hidden">Show</span>
+                <span className="text-blue-600 text-sm hidden group-open:inline">Hide</span>
+              </summary>
+              <p className="mt-2 text-sm text-gray-700">Contact support from the platform or email us. Provide your exchange and symbol/timeframe to speed up troubleshooting.</p>
+            </details>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 // Strategy Detail Component with Router
 function StrategyDetailWithRouter() {
   const { strategyName } = useParams();
   const navigate = useNavigate();
 
   const handleBack = () => {
-    navigate('/');
+    navigate('/simulator');
   };
 
   return <StrategyDetail strategyName={strategyName} onBack={handleBack} />;
@@ -1265,15 +1565,20 @@ function ModelDetailWithRouter() {
 // Main App Component
 function App() {
   return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<StrategyList />} />
-        <Route path="/strategy/:strategyName" element={<StrategyDetailWithRouter />} />
-        <Route path="/user-management" element={<UserManagementWithRouter />} />
-        <Route path="/models" element={<ModelsList />} />
-        <Route path="/model/:tableName" element={<ModelDetailWithRouter />} />
-      </Routes>
-    </Router>
+    <AuthProvider>
+      <Router>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
+          <Route path="/simulator" element={<StrategyList />} />
+          <Route path="/strategy/:strategyName" element={<StrategyDetailWithRouter />} />
+          <Route path="/user-management" element={<UserManagementWithRouter />} />
+          <Route path="/models" element={<ModelsList />} />
+          <Route path="/model/:tableName" element={<ModelDetailWithRouter />} />
+        </Routes>
+        <AuthModal />
+      </Router>
+    </AuthProvider>
   );
 }
 

@@ -3,6 +3,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
@@ -23,15 +25,265 @@ app.use(cors());
 app.use(morgan('combined'));
 app.use(express.json());
 
+// Auth helpers
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+
+function generateJwtToken(user) {
+  return jwt.sign(
+    { id: user.id, email: user.email, name: user.name },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
+}
+
+async function authMiddleware(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
+}
+
 // Routes
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Aegis Trading API',
     version: '1.0.0',
     endpoints: {
-      strategies: '/api/strategies'
+      strategies: '/api/strategies',
+      signup: '/api/auth/signup',
+      login: '/api/auth/login',
+      me: '/api/auth/me'
     }
   });
+});
+
+// Auth routes
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { name, email, password, api_key, api_secret, strategies, use_ml } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, error: 'Name, email and password are required' });
+    }
+    // Check email
+    const { rows: existing } = await pool.query('SELECT id FROM users.users WHERE email = $1', [email]);
+    if (existing.length > 0) {
+      return res.status(400).json({ success: false, error: 'Email already registered' });
+    }
+    const passwordHash = await bcrypt.hash(password, 10);
+    const useMlValue = use_ml !== undefined ? !!use_ml : false;
+    const strategiesJson = strategies ? JSON.stringify(strategies) : JSON.stringify([]);
+    const insertQuery = `
+      INSERT INTO users.users (name, email, password, api_key, api_secret, strategies, use_ml)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, name, email, strategies, use_ml, created_at
+    `;
+    const { rows } = await pool.query(insertQuery, [
+      name,
+      email,
+      passwordHash,
+      api_key || '',
+      api_secret || '',
+      strategiesJson,
+      useMlValue
+    ]);
+    const user = rows[0];
+    const token = generateJwtToken(user);
+    return res.json({ success: true, data: { user, token } });
+  } catch (err) {
+    console.error('Signup error:', err);
+    return res.status(500).json({ success: false, error: 'Signup failed', message: err.message });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Email and password are required' });
+    }
+    const { rows } = await pool.query('SELECT * FROM users.users WHERE email = $1', [email]);
+    if (rows.length === 0) {
+      return res.status(401).json({ success: false, error: 'Invalid credentials' });
+    }
+    const dbUser = rows[0];
+    const match = await bcrypt.compare(password, dbUser.password);
+    if (!match) {
+      return res.status(401).json({ success: false, error: 'Invalid credentials' });
+    }
+    const user = {
+      id: dbUser.id,
+      name: dbUser.name,
+      email: dbUser.email,
+      strategies: dbUser.strategies,
+      use_ml: dbUser.use_ml,
+      created_at: dbUser.created_at,
+      updated_at: dbUser.updated_at
+    };
+    const token = generateJwtToken(user);
+    return res.json({ success: true, data: { user, token } });
+  } catch (err) {
+    console.error('Login error:', err);
+    return res.status(500).json({ success: false, error: 'Login failed', message: err.message });
+  }
+});
+
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.user;
+    const query = `
+      SELECT id, name, email, api_key, strategies, use_ml, created_at, updated_at
+      FROM users.users WHERE id = $1
+    `;
+    const { rows } = await pool.query(query, [id]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    return res.json({ success: true, data: rows[0] });
+  } catch (err) {
+    console.error('Me error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to load profile', message: err.message });
+  }
+});
+
+// Update own profile (api_key, api_secret, strategies, use_ml, name)
+app.put('/api/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { name, email, password, api_key, api_secret, strategies, use_ml } = req.body;
+    const useMlValue = use_ml !== undefined ? !!use_ml : undefined;
+    const fields = [];
+    const values = [];
+    let idx = 1;
+    
+    // Handle profile fields
+    if (name !== undefined) { fields.push(`name = $${idx++}`); values.push(name); }
+    if (email !== undefined) { 
+      // Check if email is already taken by another user
+      const emailCheck = await pool.query('SELECT id FROM users.users WHERE email = $1 AND id != $2', [email, userId]);
+      if (emailCheck.rows.length > 0) {
+        return res.status(400).json({ success: false, error: 'Email already in use' });
+      }
+      fields.push(`email = $${idx++}`); 
+      values.push(email); 
+    }
+    if (password !== undefined && password.trim() !== '') { 
+      const hashedPassword = await bcrypt.hash(password, 10);
+      fields.push(`password = $${idx++}`); 
+      values.push(hashedPassword); 
+    }
+    
+    // Handle trading fields
+    if (api_key !== undefined) { fields.push(`api_key = $${idx++}`); values.push(api_key); }
+    if (api_secret !== undefined) { 
+      // Always update api_secret when provided (including empty string for deletion)
+      fields.push(`api_secret = $${idx++}`); 
+      values.push(api_secret); 
+    }
+    if (strategies !== undefined) { fields.push(`strategies = $${idx++}`); values.push(JSON.stringify(strategies)); }
+    if (useMlValue !== undefined) { fields.push(`use_ml = $${idx++}`); values.push(useMlValue); }
+    
+    if (fields.length === 0) {
+      return res.status(400).json({ success: false, error: 'No fields to update' });
+    }
+    
+    const query = `
+      UPDATE users.users
+      SET ${fields.join(', ')}, updated_at = NOW()
+      WHERE id = $${idx}
+      RETURNING id, name, email, api_key, strategies, use_ml, created_at, updated_at
+    `;
+    values.push(userId);
+    const { rows } = await pool.query(query, values);
+    
+    // Don't return api_secret for security
+    const userData = { ...rows[0] };
+    delete userData.api_secret;
+    
+    return res.json({ success: true, data: userData });
+  } catch (err) {
+    console.error('Update profile error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to update profile', message: err.message });
+  }
+});
+
+// Per-user execution ledger utilities
+function isSafeIdentifier(name) {
+  return /^[a-zA-Z0-9_]+$/.test(name);
+}
+
+// List user execution tables
+app.get('/api/me/execution/tables', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const sql = `
+      SELECT table_schema, table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'execution' AND table_name LIKE $1
+      ORDER BY table_name ASC
+    `;
+    const { rows } = await pool.query(sql, [`user_${userId}_strategy_%`]);
+    const tables = rows.map(r => `${r.table_schema}.${r.table_name}`);
+    return res.json({ success: true, data: tables });
+  } catch (err) {
+    console.error('List execution tables error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to list execution tables', message: err.message });
+  }
+});
+
+// Fetch a specific user execution ledger
+app.get('/api/me/execution/ledger', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { strategy } = req.query; // e.g., strategy_01
+    if (!strategy || !isSafeIdentifier(strategy)) {
+      return res.status(400).json({ success: false, error: 'Invalid strategy identifier' });
+    }
+    const fullTable = `execution.user_${userId}_${strategy}`;
+    // Verify table exists
+    const checkSql = `
+      SELECT to_regclass($1) as exists
+    `;
+    const { rows: check } = await pool.query(checkSql, [fullTable]);
+    if (!check[0] || !check[0].exists) {
+      return res.status(404).json({ success: false, error: 'Ledger not found for user/strategy' });
+    }
+    // Query ledger
+    const limit = Math.min(parseInt(req.query.limit) || 1000, 20000);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    const query = `
+      SELECT datetime, action, buy_price, sell_price, pnl_percent, pnl_sum, balance
+      FROM ${fullTable}
+      ORDER BY datetime ASC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+    const countQuery = `SELECT COUNT(*)::int as total FROM ${fullTable}`;
+    const [dataResult, countResult] = await Promise.all([
+      pool.query(query),
+      pool.query(countQuery)
+    ]);
+    const ledger = dataResult.rows.map(row => ({
+      datetime: row.datetime,
+      action: row.action,
+      buy_price: parseFloat(row.buy_price || 0),
+      sell_price: parseFloat(row.sell_price || 0),
+      pnl_percent: parseFloat(row.pnl_percent || 0),
+      pnl_sum: parseFloat(row.pnl_sum || 0),
+      balance: parseFloat(row.balance || 0)
+    }));
+    return res.json({ success: true, data: { ledger, total: countResult.rows[0].total } });
+  } catch (err) {
+    console.error('Fetch execution ledger error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch execution ledger', message: err.message });
+  }
 });
 
 // Get all simulator strategies from database
