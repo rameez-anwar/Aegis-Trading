@@ -52,7 +52,7 @@ config_columns = [
 config_columns += [Column(ind, Boolean) for ind in indicator_names]
 config_table = Table('config_strategies', metadata, *config_columns, schema='public')
 
-# --- Create table if not exists ---
+# --- Create table if not exist ---
 with engine.connect() as conn:
     if not engine.dialect.has_table(conn, 'config_strategies', schema='public'):
         metadata.create_all(engine, tables=[config_table])
