@@ -1,7 +1,7 @@
 {
   "name": "crypto-signal-lab-backend",
   "version": "1.0.0",
-  "description": "Crypto Signal Lab - Backend API Server",
+  "description": "Aegis Trading - Backend API Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -19,6 +19,6 @@
     "nodemon": "^3.0.1"
   },
   "keywords": ["crypto", "trading", "signals", "strategies", "api", "backend"],
-  "author": "Crypto Signal Lab",
+  "author": "Aegis Trading",
   "license": "MIT"
 } 

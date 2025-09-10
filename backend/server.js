@@ -26,7 +26,7 @@ app.use(express.json());
 // Routes
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'Crypto Signal Lab API',
+    message: 'Aegis Trading API',
     version: '1.0.0',
     endpoints: {
       strategies: '/api/strategies'

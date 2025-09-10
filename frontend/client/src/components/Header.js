@@ -16,8 +16,8 @@ const Header = ({ activePage = 'simulator' }) => {
                 <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-white animate-pulse"></div>
               </div>
               <div className="flex flex-col">
-                <h1 className="text-3xl font-bold text-white tracking-tight">Crypto Signal Lab</h1>
-                <p className="text-blue-200 text-sm font-medium">Advanced Trading Analytics Platform</p>
+                <h1 className="text-3xl font-bold text-white tracking-tight">Aegis Trading</h1>
+                <p className="text-blue-200 text-sm font-medium">AI-Powered Signal & Execution System</p>
               </div>
             </Link>
           </div>

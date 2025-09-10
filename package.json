@@ -1,7 +1,7 @@
 {
   "name": "crypto-signal-lab",
   "version": "1.0.0",
-  "description": "Crypto Signal Lab - Trading Strategy Simulator",
+  "description": "Aegis Trading - AI-Powered Signal & Execution System",
   "main": "index.js",
   "scripts": {
     "start": "echo 'Please run backend and frontend separately: npm run backend:dev && npm run frontend:dev'",
@@ -15,7 +15,7 @@
     "test": "cd frontend/client && npm test"
   },
   "keywords": ["crypto", "trading", "signals", "strategies", "simulator"],
-  "author": "Crypto Signal Lab",
+  "author": "Aegis Trading",
   "license": "MIT",
   "repository": {
     "type": "git",
