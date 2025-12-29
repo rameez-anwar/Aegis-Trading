@@ -726,5 +726,5 @@ def main(pnl_threshold=100):
     print("\nPipeline completed successfully")
 
 if __name__ == "__main__":
-    PNL_THRESHOLD = 100
+    PNL_THRESHOLD = 20
     main(pnl_threshold=PNL_THRESHOLD) 

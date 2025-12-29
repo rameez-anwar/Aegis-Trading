@@ -87,9 +87,15 @@ const Header = ({ activePage = 'simulator' }) => {
               {!isAuthenticated ? (
                 <button
                   onClick={() => openAuth('login')}
-                  className="px-4 py-2 text-sm font-medium text-blue-200 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                  className="flex items-center space-x-2 px-3 py-2 text-sm font-medium text-blue-200 hover:text-white hover:bg-white/10 rounded-full transition-colors"
+                  aria-label="Account"
+                  title="Account"
                 >
-                  Account
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-white">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.5 20.25a8.25 8.25 0 0115 0" />
+                    </svg>
+                  </div>
                 </button>
               ) : (
                 <div className="relative">
