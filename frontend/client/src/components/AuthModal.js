@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { X } from 'lucide-react';
 import { useAuth } from './AuthContext';
+import GoogleSignIn from './GoogleSignIn';
+import EmailVerification from './EmailVerification';
 
 const AuthModal = () => {
   const { login, signup, showAuth, authMode, closeAuth } = useAuth();
@@ -17,6 +19,8 @@ const AuthModal = () => {
   const [selectedStrategies, setSelectedStrategies] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [showVerification, setShowVerification] = useState(false);
+  const [signupEmail, setSignupEmail] = useState('');
 
   useEffect(() => { if (showAuth) setActiveTab(authMode); }, [authMode, showAuth]);
 
@@ -47,7 +51,15 @@ const AuthModal = () => {
       await login(email, password);
       closeAuth();
     } catch (err) {
-      setError(err?.response?.data?.error || 'Login failed');
+      const errorMsg = err?.response?.data?.error || 'Login failed';
+      setError(errorMsg);
+      
+      // If login failed due to unverified email, show verification UI
+      if (err?.response?.data?.requiresVerification) {
+        setSignupEmail(err?.response?.data?.email || email);
+        setShowVerification(true);
+        setActiveTab('signup'); // Switch to signup tab to show verification
+      }
     } finally { setLoading(false); }
   };
 
@@ -56,11 +68,34 @@ const AuthModal = () => {
     try {
       setLoading(true); setError(null);
       // Signup now only collects basic fields
-      await signup({ name, email, password });
-      closeAuth();
+      const response = await signup({ name, email, password });
+      
+      // If signup successful, show verification UI instead of closing
+      if (response || true) { // signup might not return user if verification required
+        setSignupEmail(email);
+        setShowVerification(true);
+        setError(null); // Clear any errors
+      }
     } catch (err) {
       setError(err?.response?.data?.error || 'Signup failed');
     } finally { setLoading(false); }
+  };
+
+  const handleVerificationComplete = (userData) => {
+    // User is now verified and logged in
+    // Reset form first
+    setName('');
+    setEmail('');
+    setPassword('');
+    setShowVerification(false);
+    setSignupEmail('');
+    // Close modal - user is now logged in
+    closeAuth();
+  };
+
+  const handleCancelVerification = () => {
+    setShowVerification(false);
+    setSignupEmail('');
   };
 
   if (!showAuth) return null;
@@ -91,40 +126,74 @@ const AuthModal = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-0 mt-6">
           <div className="p-8">
-            {error && <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
+            {error && !showVerification && <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
 
-            {activeTab === 'login' ? (
-              <form onSubmit={handleLogin} className="space-y-5">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-2">Email</label>
-                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="you@example.com" required />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-2">Password</label>
-                  <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="••••••••" required />
-                </div>
-                <button type="submit" disabled={loading} className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold shadow hover:shadow-md transition-shadow disabled:opacity-50">{loading?'Signing in...':'Sign in'}</button>
-                <p className="text-xs text-gray-500 text-center">By continuing, you agree to our Terms and Privacy Policy.</p>
-              </form>
-            ) : (
-              <form onSubmit={handleSignup} className="space-y-5">
-                <div className="grid grid-cols-1 gap-5">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-2">Name</label>
-                    <input type="text" value={name} onChange={e=>setName(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="Your name" required />
+            {showVerification ? (
+              <EmailVerification 
+                email={signupEmail}
+                onVerified={handleVerificationComplete}
+                onCancel={handleCancelVerification}
+              />
+            ) : activeTab === 'login' ? (
+              <div className="space-y-5">
+                <GoogleSignIn 
+                  onSuccess={() => closeAuth()} 
+                  onError={(err) => setError(err)}
+                />
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-300"></div>
                   </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-white text-gray-500">Or continue with email</span>
+                  </div>
+                </div>
+                <form onSubmit={handleLogin} className="space-y-5">
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-2">Email</label>
                     <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="you@example.com" required />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-2">Password</label>
-                    <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="Create a strong password" required />
+                    <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="••••••••" required />
+                  </div>
+                  <button type="submit" disabled={loading} className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold shadow hover:shadow-md transition-shadow disabled:opacity-50">{loading?'Signing in...':'Sign in'}</button>
+                  <p className="text-xs text-gray-500 text-center">By continuing, you agree to our Terms and Privacy Policy.</p>
+                </form>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                <GoogleSignIn 
+                  onSuccess={() => closeAuth()} 
+                  onError={(err) => setError(err)}
+                />
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-300"></div>
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-white text-gray-500">Or sign up with email</span>
                   </div>
                 </div>
-                <button type="submit" disabled={loading} className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold shadow hover:shadow-md transition-shadow disabled:opacity-50">{loading?'Creating...':'Create account'}</button>
-                <p className="text-xs text-gray-500 text-center">You can add API keys and strategies later in your Account.</p>
-              </form>
+                <form onSubmit={handleSignup} className="space-y-5">
+                  <div className="grid grid-cols-1 gap-5">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-2">Name</label>
+                      <input type="text" value={name} onChange={e=>setName(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="Your name" required />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-2">Email</label>
+                      <input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="you@example.com" required />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-2">Password</label>
+                      <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="Create a strong password" required />
+                    </div>
+                  </div>
+                  <button type="submit" disabled={loading} className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold shadow hover:shadow-md transition-shadow disabled:opacity-50">{loading?'Creating...':'Create account'}</button>
+                  <p className="text-xs text-gray-500 text-center">You can add API keys and strategies later in your Account.</p>
+                </form>
+              </div>
             )}
           </div>
           <div className="hidden md:block p-8 bg-gradient-to-br from-blue-50 to-indigo-50 border-l border-gray-200">

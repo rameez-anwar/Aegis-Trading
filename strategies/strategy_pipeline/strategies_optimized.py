@@ -4,6 +4,7 @@ import configparser
 import random
 import datetime
 import optuna
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy import create_engine, MetaData, Table, Column, String, Boolean, DateTime, Integer, Float, text
 from dotenv import load_dotenv
 from collections import Counter
@@ -170,18 +171,10 @@ def get_ohlcv_data(symbol, timeframe, apply_date_filter=True, warmup_days=30):
     
     # Apply date filter only if requested
     if apply_date_filter:
-        print(f"  → Filtering data for {symbol}: {start_date} to {end_date}")
-        print(f"  → Available data range: {df.index.min()} to {df.index.max()}")
-        
         # Add warmup period before start_date for indicators
         warmup_start = start_date - datetime.timedelta(days=warmup_days)
-        print(f"  → Including warmup period: {warmup_start} to {end_date}")
-        
         # Filter data with warmup period
         df = df[(df.index >= warmup_start) & (df.index <= end_date)]
-        
-        print(f"  → Filtered data range: {df.index.min()} to {df.index.max()}")
-        print(f"  → Filtered data rows: {len(df)}")
     
     # Resample if needed
     if timeframe != '1m':
@@ -213,9 +206,9 @@ def run_direct_backtest(ohlcv_df, signals_df, tp=None, sl=None, initial_balance=
         
         # Use default TP/SL if not provided
         if tp is None:
-            tp = 0.02
+            tp = 0.04
         if sl is None:
-            sl = 0.045
+            sl = 0.02
         
         # Create Backtester instance with original parameters
         backtester = Backtester(
@@ -340,8 +333,11 @@ class StrategyOptimizer:
                 else:
                     indicator_params[ind_name] = 0
         
-        tp = trial.suggest_float('tp', 0.04, 0.06)
-        sl = trial.suggest_float('sl', 0.01, 0.03)
+        # Use better risk/reward ratios: TP should be at least 2x SL
+        # This ensures we need to win less often to be profitable
+        tp = trial.suggest_float('tp', 0.04, 0.07)
+        sl = trial.suggest_float('sl', 0.02, 0.05)
+        
         
         return indicator_params, tp, sl
     
@@ -350,8 +346,6 @@ class StrategyOptimizer:
         df = self.ohlcv_data.copy()
         calculator = IndicatorCalculator(df)
         calculated_indicators = []
-        
-        print(f"    → Input data range: {df.index.min()} to {df.index.max()}")
         
         for ind_name, window in indicator_params.items():
             method_name = f"add_{ind_name}"
@@ -376,15 +370,11 @@ class StrategyOptimizer:
         if df_with_indicators.empty:
             return None, None
         
-        print(f"    → After indicators, data range: {df_with_indicators.index.min()} to {df_with_indicators.index.max()}")
-        
         # Apply date filter AFTER indicator calculation to get signals from start_date
         df_with_indicators = df_with_indicators[(df_with_indicators.index >= start_date) & (df_with_indicators.index <= end_date)]
         
         if df_with_indicators.empty:
             return None, None
-        
-        print(f"    → After date filtering: {df_with_indicators.index.min()} to {df_with_indicators.index.max()}")
         
         # Ensure datetime column
         if 'datetime' not in df_with_indicators.columns:
@@ -398,24 +388,67 @@ class StrategyOptimizer:
                                           if any(col.startswith(ind) or col == ind for ind in calculated_indicators)])
         signal_df = sg.generate_signals()
         
-        print(f"    → Generated signals range: {signal_df['datetime'].min()} to {signal_df['datetime'].max()}")
-        
-        # Apply voting mechanism
+        # Apply voting mechanism with stronger consensus threshold
         signal_cols = [col for col in signal_df.columns if col.startswith('signal_')]
         voted_signals = []
+        min_consensus = 0.6  # At least 60% of indicators must agree (stronger filter)
         
         for i, row in signal_df.iterrows():
             votes = [row[col] for col in signal_cols]
-            count = Counter(votes)
-            most_common = count.most_common()
-            if len(most_common) > 1 and most_common[0][1] == most_common[1][1]:
+            if not votes:
                 voted_signals.append(0)
-            else:
+                continue
+            
+            count = Counter(votes)
+            total_votes = len(votes)
+            most_common = count.most_common()
+            
+            if not most_common:
+                voted_signals.append(0)
+            elif len(most_common) > 1 and most_common[0][1] == most_common[1][1]:
+                # Tie - no clear signal
+                voted_signals.append(0)
+            elif most_common[0][1] / total_votes >= min_consensus:
+                # Strong consensus - use the signal
                 voted_signals.append(most_common[0][0])
+            else:
+                # Weak consensus - no signal
+                voted_signals.append(0)
+        
+        # Apply signal confirmation: need 2 consecutive signals in same direction to enter new trade
+        # This filters out false signals and reduces whipsaws
+        # Once we have a confirmed signal, we keep it until it changes direction
+        confirmed_signals = [0]  # First signal is always 0 (no previous signal to confirm)
+        last_confirmed_signal = 0
+        
+        for i in range(1, len(voted_signals)):
+            current_signal = voted_signals[i]
+            previous_signal = voted_signals[i-1]
+            
+            # Need confirmation to change signal direction
+            if current_signal != 0 and current_signal == previous_signal:
+                # Confirmed signal - use it
+                confirmed_signals.append(current_signal)
+                last_confirmed_signal = current_signal
+            elif current_signal == last_confirmed_signal:
+                # Signal continues in same direction - keep it
+                confirmed_signals.append(current_signal)
+            elif current_signal == -last_confirmed_signal:
+                # Signal reversed - need confirmation before changing
+                if current_signal == previous_signal:
+                    confirmed_signals.append(current_signal)
+                    last_confirmed_signal = current_signal
+                else:
+                    # No confirmation yet - keep previous signal
+                    confirmed_signals.append(last_confirmed_signal)
+            else:
+                # No clear signal - neutral
+                confirmed_signals.append(0)
+                last_confirmed_signal = 0
         
         signals_df = pd.DataFrame({
             'datetime': signal_df['datetime'],
-            'signal': voted_signals
+            'signal': confirmed_signals
         })
         
         return df_with_indicators, signals_df
@@ -426,12 +459,16 @@ class StrategyOptimizer:
             indicator_params, tp, sl = self.generate_optimized_parameters(trial)
             
             if not indicator_params:
-                return -1000
+                trial.report(-1000, step=0)
+                trial.set_user_attr('pruned', True)
+                raise optuna.TrialPruned()
             
             df_with_indicators, signals_df = self.calculate_indicators_and_signals(indicator_params)
             
             if signals_df is None or signals_df.empty:
-                return -1000
+                trial.report(-1000, step=0)
+                trial.set_user_attr('pruned', True)
+                raise optuna.TrialPruned()
             
             # Prepare OHLCV data for backtester
             ohlcv_backtest = self.ohlcv_data.reset_index()
@@ -440,6 +477,13 @@ class StrategyOptimizer:
             
             # Run backtest
             pnl_sum = run_direct_backtest(ohlcv_backtest, signals_df, tp, sl)
+            
+            # Report intermediate value for pruning
+            trial.report(pnl_sum, step=0)
+            
+            # Prune if result is too bad
+            if trial.should_prune():
+                raise optuna.TrialPruned()
             
             # Store best strategy if above threshold
             if pnl_sum > self.pnl_threshold:
@@ -455,6 +499,8 @@ class StrategyOptimizer:
             
             return pnl_sum
             
+        except optuna.TrialPruned:
+            raise
         except:
             return -1000
     
@@ -464,76 +510,91 @@ class StrategyOptimizer:
             return None
         
         self.fetch_data()
-        study = optuna.create_study(direction='maximize')
-        study.optimize(self.objective, n_trials=self.n_trials)
+        # Add pruning to stop bad trials early
+        study = optuna.create_study(
+            direction='maximize',
+            pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10)
+        )
+        study.optimize(self.objective, n_trials=self.n_trials, show_progress_bar=False)
         
-        return study
+        return None  # Study not used, return None
+
+def _optimize_single_strategy(strategy, pnl_threshold):
+    """Optimize a single strategy - used for parallel processing"""
+    strategy_name = strategy['name']
+    
+    try:
+        optimizer = StrategyOptimizer(
+            strategy_config=strategy,
+            n_trials=50,  # Reduced from 100 to speed up
+            pnl_threshold=pnl_threshold
+        )
+        
+        optimizer.optimize()
+        
+        if optimizer.best_strategy:
+            # Verify PnL one more time
+            ohlcv_data = get_ohlcv_data(strategy['symbol'], strategy['time_horizon'], apply_date_filter=True)
+            ohlcv_backtest = ohlcv_data.reset_index()
+            if 'datetime' not in ohlcv_backtest.columns:
+                ohlcv_backtest = ohlcv_backtest.rename(columns={'index': 'datetime'})
+            
+            verified_pnl = run_direct_backtest(
+                ohlcv_backtest, 
+                optimizer.best_strategy['signals_df'],
+                optimizer.best_strategy['tp'],
+                optimizer.best_strategy['sl']
+            )
+            
+            # Only proceed if verified PnL still meets threshold
+            if verified_pnl > pnl_threshold:
+                # Combine base strategy with optimized parameters
+                optimized_strategy = strategy.copy()
+                optimized_strategy['pnl_sum'] = verified_pnl
+                optimized_strategy['tp'] = optimizer.best_strategy['tp']
+                optimized_strategy['sl'] = optimizer.best_strategy['sl']
+                
+                # Add window sizes for each indicator
+                for ind_name in indicator_names:
+                    if ind_name in optimizer.best_strategy['indicator_params']:
+                        window_size = optimizer.best_strategy['indicator_params'][ind_name]
+                        optimized_strategy[f'{ind_name}_window_size'] = window_size
+                    else:
+                        optimized_strategy[f'{ind_name}_window_size'] = 0
+                
+                # Store signals for later saving
+                optimized_strategy['signals_df'] = optimizer.best_strategy['signals_df']
+                print(f"  ✓ {strategy_name}: PnL {verified_pnl:.1f}%")
+                return optimized_strategy
+            else:
+                return None
+        else:
+            return None
+            
+    except Exception as e:
+        return None
 
 def optimize_all_strategies(base_strategies, pnl_threshold=100):
-    """Optimize all base strategies and return successful ones"""
+    """Optimize all base strategies and return successful ones - parallelized"""
     print(f"Starting optimization process (PnL threshold: {pnl_threshold}%)")
     
     optimized_strategies = []
+    # Use fewer workers to reduce contention - CPU-bound tasks don't benefit from too many threads
+    max_workers = min(len(base_strategies), os.cpu_count() or 4)
     
-    for strategy in base_strategies:
-        strategy_name = strategy['name']
+    # Use ThreadPoolExecutor for parallel optimization (I/O and CPU bound)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_optimize_single_strategy, strategy, pnl_threshold): strategy 
+                   for strategy in base_strategies}
         
-        try:
-            print(f"Optimizing {strategy_name}...")
-            
-            optimizer = StrategyOptimizer(
-                strategy_config=strategy,
-                n_trials=100,
-                pnl_threshold=pnl_threshold
-            )
-            
-            study = optimizer.optimize()
-            
-            if optimizer.best_strategy:
-                # Verify PnL one more time
-                ohlcv_data = get_ohlcv_data(strategy['symbol'], strategy['time_horizon'], apply_date_filter=True)
-                ohlcv_backtest = ohlcv_data.reset_index()
-                if 'datetime' not in ohlcv_backtest.columns:
-                    ohlcv_backtest = ohlcv_backtest.rename(columns={'index': 'datetime'})
-                
-                verified_pnl = run_direct_backtest(
-                    ohlcv_backtest, 
-                    optimizer.best_strategy['signals_df'],
-                    optimizer.best_strategy['tp'],
-                    optimizer.best_strategy['sl']
-                )
-                
-                print(f"  → PnL: {verified_pnl:.1f}%, TP: {optimizer.best_strategy['tp']:.2f}, SL: {optimizer.best_strategy['sl']:.2f}")
-                
-                # Only proceed if verified PnL still meets threshold
-                if verified_pnl > pnl_threshold:
-                    # Combine base strategy with optimized parameters
-                    optimized_strategy = strategy.copy()
-                    optimized_strategy['pnl_sum'] = verified_pnl
-                    optimized_strategy['tp'] = optimizer.best_strategy['tp']
-                    optimized_strategy['sl'] = optimizer.best_strategy['sl']
-                    
-                    # Add window sizes for each indicator
-                    for ind_name in indicator_names:
-                        if ind_name in optimizer.best_strategy['indicator_params']:
-                            window_size = optimizer.best_strategy['indicator_params'][ind_name]
-                            optimized_strategy[f'{ind_name}_window_size'] = window_size
-                        else:
-                            optimized_strategy[f'{ind_name}_window_size'] = 0
-                    
-                    # Store signals for later saving
-                    optimized_strategy['signals_df'] = optimizer.best_strategy['signals_df']
-                    optimized_strategies.append(optimized_strategy)
-                    
-                    print(f"  → Strategy saved")
-                else:
-                    print(f"  → Strategy failed verification")
-            else:
-                print(f"  → No strategies above threshold")
-                
-        except Exception as e:
-            print(f"  → Error: {e}")
-            continue
+        completed = 0
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                optimized_strategies.append(result)
+            completed += 1
+            if completed % 5 == 0:
+                print(f"  Progress: {completed}/{len(base_strategies)} strategies optimized")
     
     print(f"\nOptimization completed: {len(optimized_strategies)} strategies above threshold")
     return optimized_strategies
@@ -594,104 +655,130 @@ def save_optimized_strategies(optimized_strategies, config_table):
     
     print(f"Successfully saved {saved_count} optimized strategies")
 
+def _run_single_backtest(strategy):
+    """Run backtest for a single strategy - used for parallel processing"""
+    strategy_name = strategy['name']
+    
+    try:
+        print(f"  → Running backtest for {strategy_name}...")
+        
+        symbol = strategy['symbol']
+        exchange = strategy['exchange']
+        tp = strategy['tp']
+        sl = strategy['sl']
+        initial_balance = 1000
+        fee_percent = 0.0005
+        
+        # Get signals from the signals_df that was already calculated
+        signals_df = strategy['signals_df']
+        
+        # Get OHLCV data based on exchange and symbol
+        ohlcv_table = f"{exchange}_data.{symbol}_1m"
+        with engine.connect() as conn:
+            ohlcv = pd.read_sql_query(f"SELECT * FROM {ohlcv_table}", conn)
+        
+        # Prepare data
+        ohlcv['datetime'] = pd.to_datetime(ohlcv['datetime'])
+        signals_df['datetime'] = pd.to_datetime(signals_df['datetime'])
+        ohlcv = ohlcv.sort_values('datetime')
+        signals_df = signals_df.sort_values('datetime')
+        
+        print(f"    → OHLCV data: {len(ohlcv)} rows from {ohlcv['datetime'].min()} to {ohlcv['datetime'].max()}")
+        print(f"    → Signals data: {len(signals_df)} rows from {signals_df['datetime'].min()} to {signals_df['datetime'].max()}")
+        print(f"    → TP: {tp:.2f}, SL: {sl:.2f}")
+        
+        # Create Backtester instance with original parameters
+        backtester = Backtester(
+            ohlcv_df=ohlcv, 
+            signals_df=signals_df,
+            tp=tp,
+            sl=sl,
+            initial_balance=initial_balance,
+            fee_percent=fee_percent
+        )
+        
+        # Run backtest
+        result = backtester.run()
+        
+        if not result.empty:
+            # Round results
+            result[['buy_price', 'sell_price', 'pnl_percent', 'pnl_sum', 'balance']] = \
+                result[['buy_price', 'sell_price', 'pnl_percent', 'pnl_sum', 'balance']].round(2)
+            
+            # Save to DB
+            backtest_table_name = f"{strategy_name}_backtest"
+            result.to_sql(backtest_table_name, engine, schema='strategies_backtest', 
+                        if_exists='replace', index=False)
+            
+            # Display results
+            final_balance = result.iloc[-1]['balance']
+            final_pnl = result.iloc[-1]['pnl_sum']
+            total_trades = len(result[result['action'].isin(['tp', 'sl', 'direction_change'])])
+            
+            print(f"    Final Balance: {final_balance:.2f}")
+            print(f"    Total Trades: {total_trades}")
+            print(f"    Final PnL: {final_pnl:.1f}%")
+            print(f"    Saved as: strategies_backtest.{backtest_table_name}")
+            
+            return True
+        else:
+            print(f"    No trades executed")
+            return False
+            
+    except Exception as e:
+        print(f"    Backtest failed: {e}")
+        return False
+
 def run_backtest_on_new_strategies(optimized_strategies):
-    """Execute backtest only on newly created strategies"""
+    """Execute backtest only on newly created strategies - parallelized"""
     print("Running backtests on newly created strategies...")
     
     backtest_count = 0
+    max_workers = min(len(optimized_strategies), (os.cpu_count() or 4) * 2)
     
-    for strategy in optimized_strategies:
-        strategy_name = strategy['name']
-        try:
-            print(f"  → Running backtest for {strategy_name}...")
-            
-            symbol = strategy['symbol']
-            exchange = strategy['exchange']
-            tp = strategy['tp']
-            sl = strategy['sl']
-            initial_balance = 1000
-            fee_percent = 0.0005
-            
-            # Get signals from the signals_df that was already calculated
-            signals_df = strategy['signals_df']
-            
-            # Get OHLCV data based on exchange and symbol
-            ohlcv_table = f"{exchange}_data.{symbol}_1m"
-            with engine.connect() as conn:
-                ohlcv = pd.read_sql_query(f"SELECT * FROM {ohlcv_table}", conn)
-            
-            # Prepare data
-            ohlcv['datetime'] = pd.to_datetime(ohlcv['datetime'])
-            signals_df['datetime'] = pd.to_datetime(signals_df['datetime'])
-            ohlcv = ohlcv.sort_values('datetime')
-            signals_df = signals_df.sort_values('datetime')
-            
-            print(f"    → OHLCV data: {len(ohlcv)} rows from {ohlcv['datetime'].min()} to {ohlcv['datetime'].max()}")
-            print(f"    → Signals data: {len(signals_df)} rows from {signals_df['datetime'].min()} to {signals_df['datetime'].max()}")
-            print(f"    → TP: {tp:.2f}, SL: {sl:.2f}")
-            
-            # Create Backtester instance with original parameters
-            backtester = Backtester(
-                ohlcv_df=ohlcv, 
-                signals_df=signals_df,
-                tp=tp,
-                sl=sl,
-                initial_balance=initial_balance,
-                fee_percent=fee_percent
-            )
-            
-            # Run backtest
-            result = backtester.run()
-            
-            if not result.empty:
-                # Round results
-                result[['buy_price', 'sell_price', 'pnl_percent', 'pnl_sum', 'balance']] = \
-                    result[['buy_price', 'sell_price', 'pnl_percent', 'pnl_sum', 'balance']].round(2)
-                
-                # Save to DB
-                backtest_table_name = f"{strategy_name}_backtest"
-                result.to_sql(backtest_table_name, engine, schema='strategies_backtest', 
-                            if_exists='replace', index=False)
-                
-                # Display results
-                final_balance = result.iloc[-1]['balance']
-                final_pnl = result.iloc[-1]['pnl_sum']
-                total_trades = len(result[result['action'].isin(['tp', 'sl', 'direction_change'])])
-                
-                print(f"    Final Balance: {final_balance:.2f}")
-                print(f"    Total Trades: {total_trades}")
-                print(f"    Final PnL: {final_pnl:.1f}%")
-                print(f"    Saved as: strategies_backtest.{backtest_table_name}")
-                
+    # Use ThreadPoolExecutor for parallel backtesting (I/O bound)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_run_single_backtest, strategy): strategy 
+                   for strategy in optimized_strategies}
+        
+        for future in as_completed(futures):
+            if future.result():
                 backtest_count += 1
-            else:
-                print(f"    No trades executed")
-                
-        except Exception as e:
-            print(f"    Backtest failed: {e}")
-            continue
     
     print(f"Backtests completed: {backtest_count} files generated")
 
-def download_latest_data():
-    """Download the latest data for all configured symbols"""
+def _download_symbol_data(symbol):
+    """Download data for a single symbol - used for parallel processing"""
     from data.downloaders.DataDownloader import DataDownloader
     
+    try:
+        print(f"  → Downloading latest data for {symbol}...")
+        downloader = DataDownloader(exchange=primary_exchange, symbol=symbol, time_horizon='1m')
+        df_1min, df_horizon = downloader.fetch_data(auto_download=True)
+        
+        if df_1min is not None and not df_1min.empty:
+            print(f"    → Successfully downloaded {len(df_1min)} rows for {symbol}")
+            print(f"    → Data range: {df_1min.index.min()} to {df_1min.index.max()}")
+            return True
+        else:
+            print(f"    → Failed to download data for {symbol}")
+            return False
+    except Exception as e:
+        print(f"    → Error downloading data for {symbol}: {e}")
+        return False
+
+def download_latest_data():
+    """Download the latest data for all configured symbols - parallelized"""
     print("Downloading latest data for all symbols...")
     
-    for symbol in symbols:
-        try:
-            print(f"  → Downloading latest data for {symbol}...")
-            downloader = DataDownloader(exchange=primary_exchange, symbol=symbol, time_horizon='1m')
-            df_1min, df_horizon = downloader.fetch_data(auto_download=True)
-            
-            if df_1min is not None and not df_1min.empty:
-                print(f"    → Successfully downloaded {len(df_1min)} rows for {symbol}")
-                print(f"    → Data range: {df_1min.index.min()} to {df_1min.index.max()}")
-            else:
-                print(f"    → Failed to download data for {symbol}")
-        except Exception as e:
-            print(f"    → Error downloading data for {symbol}: {e}")
+    max_workers = min(len(symbols), (os.cpu_count() or 4) * 2)
+    
+    # Use ThreadPoolExecutor for parallel downloads (I/O bound)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_download_symbol_data, symbol): symbol for symbol in symbols}
+        
+        for future in as_completed(futures):
+            future.result()  # Wait for completion
 
 def main(pnl_threshold=100):
     """Execute complete optimization pipeline"""
@@ -726,5 +813,5 @@ def main(pnl_threshold=100):
     print("\nPipeline completed successfully")
 
 if __name__ == "__main__":
-    PNL_THRESHOLD = 20
+    PNL_THRESHOLD = 10
     main(pnl_threshold=PNL_THRESHOLD) 

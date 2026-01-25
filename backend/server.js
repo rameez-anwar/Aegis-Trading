@@ -5,6 +5,8 @@ const morgan = require('morgan');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
+const { sendVerificationEmail } = require('./utils/sendEmail');
 require('dotenv').config();
 
 const app = express();
@@ -28,6 +30,10 @@ app.use(express.json());
 // Auth helpers
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+
+// Google OAuth client
+const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 function generateJwtToken(user) {
   return jwt.sign(
@@ -61,9 +67,50 @@ app.get('/', (req, res) => {
       strategies: '/api/strategies',
       signup: '/api/auth/signup',
       login: '/api/auth/login',
-      me: '/api/auth/me'
+      me: '/api/auth/me',
+      testEmail: '/api/test-email'
     }
   });
+});
+
+// Test email endpoint (for debugging)
+app.post('/api/test-email', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email address is required' });
+    }
+
+    // Check if email credentials are configured
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Email credentials not configured',
+        details: 'Set EMAIL_USER and EMAIL_PASS in your .env file'
+      });
+    }
+
+    const testCode = '123456';
+    await sendVerificationEmail(email, testCode);
+    
+    return res.json({
+      success: true,
+      message: `Test email sent successfully to ${email}`,
+      code: testCode,
+      emailConfig: {
+        service: process.env.EMAIL_SERVICE || 'gmail',
+        user: process.env.EMAIL_USER
+      }
+    });
+  } catch (error) {
+    console.error('Test email error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      details: 'Check backend console for more details'
+    });
+  }
 });
 
 // Auth routes
@@ -78,26 +125,69 @@ app.post('/api/auth/signup', async (req, res) => {
     if (existing.length > 0) {
       return res.status(400).json({ success: false, error: 'Email already registered' });
     }
+    
+    // Generate 6-digit verification code
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verificationExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+    
     const passwordHash = await bcrypt.hash(password, 10);
     const useMlValue = use_ml !== undefined ? !!use_ml : false;
     const strategiesJson = strategies ? JSON.stringify(strategies) : JSON.stringify([]);
     const insertQuery = `
-      INSERT INTO users.users (name, email, password, api_key, api_secret, strategies, use_ml)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING id, name, email, strategies, use_ml, created_at
+      INSERT INTO users.users (name, email, password, api_key, api_secret, strategies, use_ml, is_email_verified, email_verification_code, email_verification_expires, auth_provider)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING id, name, email, strategies, use_ml, created_at, is_email_verified
     `;
     const { rows } = await pool.query(insertQuery, [
       name,
       email,
       passwordHash,
-      api_key || '',
-      api_secret || '',
+      api_key || null,
+      api_secret || null,
       strategiesJson,
-      useMlValue
+      useMlValue,
+      false, // is_email_verified
+      verificationCode,
+      verificationExpires,
+      'email' // auth_provider
     ]);
     const user = rows[0];
-    const token = generateJwtToken(user);
-    return res.json({ success: true, data: { user, token } });
+    
+    // Send verification email
+    try {
+      await sendVerificationEmail(email, verificationCode);
+      console.log(`✅ Verification code sent to ${email}`);
+    } catch (emailError) {
+      console.error('❌ Failed to send verification email:', emailError.message);
+      // Still return success but include warning
+      return res.json({ 
+        success: true, 
+        message: 'Account created, but verification email failed to send. Please use "Resend Code" or contact support.',
+        emailError: emailError.message,
+        data: { 
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            is_email_verified: user.is_email_verified
+          }
+        }
+      });
+    }
+    
+    // Don't return token - user needs to verify email first
+    return res.json({ 
+      success: true, 
+      message: 'Verification code sent to your email. Please verify your email to complete signup.',
+      data: { 
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          is_email_verified: user.is_email_verified
+        }
+      }
+    });
   } catch (err) {
     console.error('Signup error:', err);
     return res.status(500).json({ success: false, error: 'Signup failed', message: err.message });
@@ -115,6 +205,17 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
     const dbUser = rows[0];
+    
+    // Check if email is verified (only for email/password auth, Google users are auto-verified)
+    if (dbUser.auth_provider === 'email' && !dbUser.is_email_verified) {
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Please verify your email before logging in',
+        requiresVerification: true,
+        email: dbUser.email
+      });
+    }
+    
     const match = await bcrypt.compare(password, dbUser.password);
     if (!match) {
       return res.status(401).json({ success: false, error: 'Invalid credentials' });
@@ -125,6 +226,7 @@ app.post('/api/auth/login', async (req, res) => {
       email: dbUser.email,
       strategies: dbUser.strategies,
       use_ml: dbUser.use_ml,
+      is_email_verified: dbUser.is_email_verified,
       created_at: dbUser.created_at,
       updated_at: dbUser.updated_at
     };
@@ -133,6 +235,299 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) {
     console.error('Login error:', err);
     return res.status(500).json({ success: false, error: 'Login failed', message: err.message });
+  }
+});
+
+// Google OAuth route
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'Google token is required' });
+    }
+
+    if (!googleClient) {
+      return res.status(500).json({ success: false, error: 'Google OAuth not configured. Please set GOOGLE_CLIENT_ID in environment variables.' });
+    }
+
+    // Verify the Google ID token
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const {
+      email,
+      email_verified,
+      name,
+      picture,
+      sub: googleId,
+    } = payload;
+
+    if (!email_verified) {
+      return res.status(403).json({ success: false, error: 'Email not verified by Google' });
+    }
+
+    // Check if user exists by email or googleId
+    // Note: If google_id column doesn't exist, this will fail - run migration first
+    let user = null;
+    let existingUsers = [];
+    try {
+      const result = await pool.query(
+        'SELECT * FROM users.users WHERE email = $1 OR google_id = $2',
+        [email, googleId]
+      );
+      existingUsers = result.rows;
+    } catch (dbError) {
+      // Check if error is due to missing column
+      if (dbError.message && dbError.message.includes('column "google_id" does not exist')) {
+        return res.status(500).json({ 
+          success: false, 
+          error: 'Database migration required. Please run: backend/migrations/add_google_auth_fields.sql' 
+        });
+      }
+      throw dbError; // Re-throw if it's a different error
+    }
+
+    if (existingUsers.length > 0) {
+      // User exists - update google_id if missing and return user
+      user = existingUsers[0];
+      
+      // Update google_id and avatar if not set (only if columns exist)
+      try {
+        if (!user.google_id || !user.avatar) {
+          await pool.query(
+            'UPDATE users.users SET google_id = $1, avatar = $2, auth_provider = COALESCE(auth_provider, $3), updated_at = NOW() WHERE id = $4',
+            [googleId, picture, 'google', user.id]
+          );
+          // Fetch updated user
+          const { rows: updated } = await pool.query('SELECT * FROM users.users WHERE id = $1', [user.id]);
+          user = updated[0];
+        }
+      } catch (updateError) {
+        // If columns don't exist, user object won't have these fields - that's okay
+        // We'll just use the existing user data
+        console.warn('Could not update Google auth fields (columns may not exist):', updateError.message);
+      }
+    } else {
+      // Create new user - password, api_key, and api_secret are NULL for Google OAuth users
+      // Google users are automatically verified (no email verification needed)
+      const insertQuery = `
+        INSERT INTO users.users (name, email, password, api_key, api_secret, google_id, avatar, auth_provider, strategies, use_ml, is_email_verified)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id, name, email, google_id, avatar, auth_provider, strategies, use_ml, is_email_verified, created_at, updated_at
+      `;
+      const { rows: newUser } = await pool.query(insertQuery, [
+        name,
+        email,
+        null, // Password is NULL for Google OAuth users
+        null, // api_key is NULL (can be added later)
+        null, // api_secret is NULL (can be added later)
+        googleId,
+        picture,
+        'google',
+        JSON.stringify([]), // Empty strategies array
+        false, // use_ml default
+        true // is_email_verified - Google users are auto-verified
+      ]);
+      user = newUser[0];
+    }
+
+    // Prepare user object for JWT (handle missing Google auth fields gracefully)
+    const userData = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      google_id: user.google_id || null,
+      avatar: user.avatar || null,
+      auth_provider: user.auth_provider || 'google',
+      strategies: user.strategies,
+      use_ml: user.use_ml,
+      created_at: user.created_at,
+      updated_at: user.updated_at
+    };
+
+    // Generate JWT token
+    const appToken = generateJwtToken(userData);
+
+    return res.json({
+      success: true,
+      data: {
+        user: userData,
+        token: appToken
+      }
+    });
+
+  } catch (err) {
+    console.error('Google OAuth error:', err);
+    
+    // Handle specific Google OAuth errors
+    if (err.message && err.message.includes('Invalid token')) {
+      return res.status(401).json({ success: false, error: 'Invalid Google token' });
+    }
+    
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Google authentication failed', 
+      message: err.message 
+    });
+  }
+});
+
+// Email verification endpoint
+app.post('/api/auth/verify-email', async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+    
+    const { rows } = await pool.query(
+      'SELECT * FROM users.users WHERE email = $1',
+      [email]
+    );
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    const user = rows[0];
+    
+    // IMPORTANT: Check if already verified FIRST - return success with token immediately
+    // This handles the case where user was verified but frontend still shows verification UI
+    if (user.is_email_verified) {
+      const userData = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        is_email_verified: true,
+        strategies: user.strategies,
+        use_ml: user.use_ml
+      };
+      const token = generateJwtToken(userData);
+      return res.json({
+        success: true,
+        message: 'Email already verified',
+        data: {
+          user: userData,
+          token
+        }
+      });
+    }
+    
+    // If not verified, code is required
+    if (!code) {
+      return res.status(400).json({ success: false, error: 'Verification code is required' });
+    }
+    
+    // Check if code matches and hasn't expired
+    if (!user.email_verification_code || user.email_verification_code !== code) {
+      return res.status(400).json({ success: false, error: 'Invalid verification code' });
+    }
+    
+    if (!user.email_verification_expires || new Date(user.email_verification_expires) < new Date()) {
+      return res.status(400).json({ success: false, error: 'Verification code has expired. Please request a new one.' });
+    }
+    
+    // Verify the email
+    await pool.query(
+      `UPDATE users.users 
+       SET is_email_verified = true, 
+           email_verification_code = NULL, 
+           email_verification_expires = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, name, email, is_email_verified`,
+      [user.id]
+    );
+    
+    // Generate JWT token for immediate login
+    const userData = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      is_email_verified: true,
+      strategies: user.strategies,
+      use_ml: user.use_ml
+    };
+    const token = generateJwtToken(userData);
+    
+    return res.json({
+      success: true,
+      message: 'Email verified successfully',
+      data: {
+        user: userData,
+        token
+      }
+    });
+  } catch (err) {
+    console.error('Email verification error:', err);
+    return res.status(500).json({ success: false, error: 'Verification failed', message: err.message });
+  }
+});
+
+// Resend verification code endpoint
+app.post('/api/auth/resend-verification', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+    
+    const { rows } = await pool.query(
+      'SELECT * FROM users.users WHERE email = $1',
+      [email]
+    );
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    const user = rows[0];
+    
+    // Check if already verified
+    if (user.is_email_verified) {
+      return res.json({ 
+        success: true, 
+        message: 'Email already verified'
+      });
+    }
+    
+    // Generate new verification code
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verificationExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    
+    await pool.query(
+      `UPDATE users.users 
+       SET email_verification_code = $1, 
+           email_verification_expires = $2,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [verificationCode, verificationExpires, user.id]
+    );
+    
+    // Send verification email
+    try {
+      await sendVerificationEmail(email, verificationCode);
+      console.log(`✅ Verification code resent to ${email}`);
+      return res.json({
+        success: true,
+        message: 'Verification code sent to your email'
+      });
+    } catch (emailError) {
+      console.error('❌ Failed to resend verification email:', emailError.message);
+      return res.status(500).json({ 
+        success: false, 
+        error: emailError.message || 'Failed to send verification email. Please check your email configuration.'
+      });
+    }
+  } catch (err) {
+    console.error('Resend verification error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to resend verification code', message: err.message });
   }
 });
 

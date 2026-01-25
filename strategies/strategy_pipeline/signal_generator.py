@@ -150,8 +150,13 @@ class StrategySignalGenerator:
     def generate_signal(self, df_with_indicators, calculated_indicators):
         """Generate trading signal based on indicator data with improved logic"""
         try:
-            # Create signal generator with the dataframe and indicator names
-            signal_generator = SignalGenerator(df_with_indicators, calculated_indicators)
+            # Get actual column names from dataframe that match calculated indicators
+            # SignalGenerator needs column names, not just base indicator names
+            indicator_column_names = [col for col in df_with_indicators.columns 
+                                     if any(col.startswith(ind) or col == ind for ind in calculated_indicators)]
+            
+            # Create signal generator with the dataframe and indicator column names
+            signal_generator = SignalGenerator(df_with_indicators, indicator_names=indicator_column_names)
             signals_df = signal_generator.generate_signals()
             
             if signals_df.empty:

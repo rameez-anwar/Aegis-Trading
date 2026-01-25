@@ -51,6 +51,13 @@ export function AuthProvider({ children }) {
 
   const signup = async (payload) => {
     const res = await axios.post('/api/auth/signup', payload);
+    // Signup now returns message instead of token (email verification required)
+    // Return the response so AuthModal can handle verification UI
+    return res.data;
+  };
+
+  const googleLogin = async (googleToken) => {
+    const res = await axios.post('/api/auth/google', { token: googleToken });
     const { user: userData, token: jwt } = res.data.data || res.data;
     setUser(userData);
     setToken(jwt);
@@ -68,7 +75,22 @@ export function AuthProvider({ children }) {
   const openAuth = (mode = 'login') => { setAuthMode(mode); setShowAuth(true); };
   const closeAuth = () => setShowAuth(false);
 
-  const value = useMemo(() => ({ user, token, loading, login, signup, logout, isAuthenticated: !!user, showAuth, authMode, openAuth, closeAuth }), [user, token, loading, showAuth, authMode]);
+  const value = useMemo(() => ({ 
+    user, 
+    token, 
+    loading, 
+    login, 
+    signup, 
+    googleLogin, 
+    logout, 
+    isAuthenticated: !!user, 
+    showAuth, 
+    authMode, 
+    openAuth, 
+    closeAuth,
+    setUser,
+    setToken
+  }), [user, token, loading, showAuth, authMode]);
 
   return (
     <AuthContext.Provider value={value}>

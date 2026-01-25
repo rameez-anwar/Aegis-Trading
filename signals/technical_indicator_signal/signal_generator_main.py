@@ -43,9 +43,10 @@ if __name__ == "__main__":
         calculator = IndicatorCalculator(df)
         df_with_indicators = calculator.calculate_all()
 
-        # Drop rows with any missing or empty values after indicators are applied
-        df_with_indicators = df_with_indicators.dropna(how='any')
-        df_with_indicators = df_with_indicators[~df_with_indicators.isin([None, '', 'NaN', 'nan']).any(axis=1)]
+        # Drop rows where OHLCV data is missing
+        ohlcv_cols = ['datetime', 'open', 'high', 'low', 'close', 'volume']
+        df_with_indicators = df_with_indicators.dropna(subset=ohlcv_cols)
+        df_with_indicators = df_with_indicators[~df_with_indicators[ohlcv_cols].isin([None, '', 'NaN', 'nan']).any(axis=1)]
 
         # === Apply signal rules ===
         # Collect enabled indicators from all relevant sections
@@ -89,21 +90,19 @@ if __name__ == "__main__":
         # ... add more as you implement rules
         }
         indicators_in_df = [indicator_map[k] for k in enabled_indicators if indicator_map.get(k) in df_with_indicators.columns]
+        
+        # Drop rows where any of the indicators we're using are NaN
+        # This ensures we only generate signals when we have valid indicator values
+        if indicators_in_df:
+            df_with_indicators = df_with_indicators.dropna(subset=indicators_in_df)
         sg = SignalGenerator(df_with_indicators, indicator_names=indicators_in_df)
         signal_df = sg.generate_signals()
-        # Add datetime and OHLCV columns for reference
-        ohlcv_cols = ['datetime', 'open', 'high', 'low', 'close', 'volume']
-        # Remove OHLCV columns from signal_df before concatenation
-        signal_df_no_ohlcv = signal_df.drop(columns=ohlcv_cols)
-        output_df = df_with_indicators[ohlcv_cols].copy()
-        output_df = output_df.reset_index(drop=True)
-        signal_df_no_ohlcv = signal_df_no_ohlcv.reset_index(drop=True)
-        output_df = output_df.join(signal_df_no_ohlcv)
+        # signal_df already contains datetime, OHLCV, and signal columns
         # Round volume to 2 decimal places
-        output_df['volume'] = output_df['volume'].round(2)
+        signal_df['volume'] = signal_df['volume'].round(2)
         # Save only datetime, ohlcv, and signal columns
         output_filename = f"{exchange}_{symbol.lower()}_{time_horizon}_signals.csv"
-        output_df.to_csv(output_filename, index=False)
+        signal_df.to_csv(output_filename, index=False)
         print(f"Signal data saved to {output_filename}")
     else:
         print(f"No data available for {exchange}")

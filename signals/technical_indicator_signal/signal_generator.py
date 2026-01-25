@@ -49,5 +49,10 @@ class SignalGenerator:
                 df[signal_col] = 0
             signal_columns.append(signal_col)
 
+        # Fix look-ahead bias: shift signals forward by 1 period
+        # Signal generated at time T will be used at time T+1
+        for signal_col in signal_columns:
+            df[signal_col] = df[signal_col].shift(1).fillna(0)  # Fill first row with 0 (neutral signal)
+
         base_columns = ['datetime', 'open', 'high', 'low', 'close', 'volume']
         return df[base_columns + signal_columns]

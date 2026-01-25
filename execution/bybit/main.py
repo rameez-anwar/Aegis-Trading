@@ -34,7 +34,7 @@ class BybitTrader:
         if not self.api_key or not self.api_secret:
             raise ValueError("Please set bybit_api and bybit_secret environment variables")
         
-        # Initialize client with demo account and proper settings
+        `# Initialize client with demo account and proper settings
         self.client = HTTP(
             demo=True,  # Use demo account
             api_key=self.api_key,

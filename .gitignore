@@ -116,17 +116,35 @@ Thumbs.db
 data/
 ledger_*.csv
 
-# Python
+# Python - Cache and compiled files
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.pyc
+*.pyo
+*.pyd
 *$py.class
 *.so
 .Python
+# Python virtual environments
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+# Python testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+# Python distribution
+*.egg-info/
+.eggs/
+dist/
+*.egg
+# __init__.py files (auto-generated)
+**/__init__.py
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -202,3 +220,27 @@ secrets.json
 *.bak
 *.backup
 *.old
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Additional Python patterns
+# Note: __init__.py files are typically tracked, but ignoring if auto-generated
+**/__init__.py
