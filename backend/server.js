@@ -535,7 +535,7 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
     const { id } = req.user;
     const query = `
-      SELECT id, name, email, api_key, strategies, use_ml, created_at, updated_at
+      SELECT id, name, email, api_key, strategies, use_ml, avatar, auth_provider, created_at, updated_at
       FROM users.users WHERE id = $1
     `;
     const { rows } = await pool.query(query, [id]);
@@ -626,7 +626,39 @@ app.get('/api/me/execution/tables', authMiddleware, async (req, res) => {
       ORDER BY table_name ASC
     `;
     const { rows } = await pool.query(sql, [`user_${userId}_strategy_%`]);
-    const tables = rows.map(r => `${r.table_schema}.${r.table_name}`);
+    
+    // Map table names to include symbol and strategy name
+    const tables = await Promise.all(rows.map(async (r) => {
+      const fullTableName = `${r.table_schema}.${r.table_name}`;
+      // Extract strategy name from table name (e.g., "user_67_strategy_01" -> "strategy_01")
+      const strategyMatch = r.table_name.match(/strategy_\d+$/);
+      const strategyName = strategyMatch ? strategyMatch[0] : r.table_name;
+      
+      // Try to get symbol from config_strategies table
+      let symbol = null;
+      try {
+        const strategyQuery = `SELECT symbol FROM public.config_strategies WHERE name = $1`;
+        const strategyResult = await pool.query(strategyQuery, [strategyName]);
+        if (strategyResult.rows.length > 0 && strategyResult.rows[0].symbol) {
+          symbol = strategyResult.rows[0].symbol.toUpperCase();
+          // Add USDT suffix if not present
+          if (!symbol.endsWith('USDT')) {
+            symbol = `${symbol}USDT`;
+          }
+        }
+      } catch (e) {
+        // If strategy not found in config, use fallback
+        console.log(`Strategy ${strategyName} not found in config_strategies`);
+      }
+      
+      return {
+        tableName: fullTableName,
+        displayName: symbol ? `${symbol} (${strategyName})` : strategyName,
+        symbol: symbol || null,
+        strategyName: strategyName
+      };
+    }));
+    
     return res.json({ success: true, data: tables });
   } catch (err) {
     console.error('List execution tables error:', err);
@@ -651,11 +683,11 @@ app.get('/api/me/execution/ledger', authMiddleware, async (req, res) => {
     if (!check[0] || !check[0].exists) {
       return res.status(404).json({ success: false, error: 'Ledger not found for user/strategy' });
     }
-    // Query ledger
+    // Query ledger - return all columns
     const limit = Math.min(parseInt(req.query.limit) || 1000, 20000);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     const query = `
-      SELECT datetime, action, buy_price, sell_price, pnl_percent, pnl_sum, balance
+      SELECT datetime, predicted_direction, action, buy_price, sell_price, pnl_percent, pnl_sum, balance, trade_amount, order_id
       FROM ${fullTable}
       ORDER BY datetime ASC
       LIMIT ${limit} OFFSET ${offset}
@@ -667,12 +699,15 @@ app.get('/api/me/execution/ledger', authMiddleware, async (req, res) => {
     ]);
     const ledger = dataResult.rows.map(row => ({
       datetime: row.datetime,
+      predicted_direction: row.predicted_direction || null,
       action: row.action,
       buy_price: parseFloat(row.buy_price || 0),
       sell_price: parseFloat(row.sell_price || 0),
       pnl_percent: parseFloat(row.pnl_percent || 0),
       pnl_sum: parseFloat(row.pnl_sum || 0),
-      balance: parseFloat(row.balance || 0)
+      balance: parseFloat(row.balance || 0),
+      trade_amount: parseFloat(row.trade_amount || 0),
+      order_id: row.order_id || null
     }));
     return res.json({ success: true, data: { ledger, total: countResult.rows[0].total } });
   } catch (err) {
@@ -2115,6 +2150,126 @@ app.get('/api/models/:tableName/ledger', async (req, res) => {
       error: 'Failed to fetch ledger data',
       message: error.message
     });
+  }
+});
+
+// Get user's open positions
+app.get('/api/me/positions', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { rows: userRows } = await pool.query(
+      'SELECT api_key, api_secret FROM users.users WHERE id = $1',
+      [userId]
+    );
+    
+    if (userRows.length === 0 || !userRows[0].api_key || !userRows[0].api_secret) {
+      return res.json({ success: true, data: [] });
+    }
+    
+    // For now, return mock data structure - replace with actual Bybit API calls
+    // You'll need to integrate pybit or similar library here
+    const positions = [];
+    
+    // TODO: Integrate actual Bybit API to get positions
+    // const { HTTP } = require('pybit');
+    // const client = new HTTP({ api_key: userRows[0].api_key, api_secret: userRows[0].api_secret });
+    // const positionsResponse = await client.getPositions({ category: 'linear' });
+    
+    return res.json({ success: true, data: positions });
+  } catch (err) {
+    console.error('Get positions error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch positions', message: err.message });
+  }
+});
+
+// Close a position
+app.post('/api/me/positions/:symbol/close', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { symbol } = req.params;
+    const { side, qty } = req.body;
+    
+    const { rows: userRows } = await pool.query(
+      'SELECT api_key, api_secret FROM users.users WHERE id = $1',
+      [userId]
+    );
+    
+    if (userRows.length === 0 || !userRows[0].api_key || !userRows[0].api_secret) {
+      return res.status(400).json({ success: false, error: 'API credentials not configured' });
+    }
+    
+    // TODO: Integrate actual Bybit API to close position
+    // const { HTTP } = require('pybit');
+    // const client = new HTTP({ api_key: userRows[0].api_key, api_secret: userRows[0].api_secret });
+    // const closeSide = side === 'Buy' ? 'Sell' : 'Buy';
+    // const response = await client.placeOrder({
+    //   category: 'linear',
+    //   symbol: symbol,
+    //   side: closeSide,
+    //   orderType: 'Market',
+    //   qty: qty,
+    //   reduceOnly: true
+    // });
+    
+    return res.json({ success: true, message: 'Position closed successfully' });
+  } catch (err) {
+    console.error('Close position error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to close position', message: err.message });
+  }
+});
+
+// Get leverage settings
+app.get('/api/me/leverage', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { symbol } = req.query;
+    
+    const { rows: userRows } = await pool.query(
+      'SELECT api_key, api_secret FROM users.users WHERE id = $1',
+      [userId]
+    );
+    
+    if (userRows.length === 0 || !userRows[0].api_key || !userRows[0].api_secret) {
+      return res.json({ success: true, data: { leverage: 1 } });
+    }
+    
+    // TODO: Integrate actual Bybit API to get leverage
+    // For now return default
+    return res.json({ success: true, data: { leverage: 1, symbol: symbol || 'all' } });
+  } catch (err) {
+    console.error('Get leverage error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch leverage', message: err.message });
+  }
+});
+
+// Set leverage
+app.post('/api/me/leverage', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { symbol, leverage } = req.body;
+    
+    if (!symbol || !leverage) {
+      return res.status(400).json({ success: false, error: 'Symbol and leverage are required' });
+    }
+    
+    const { rows: userRows } = await pool.query(
+      'SELECT api_key, api_secret FROM users.users WHERE id = $1',
+      [userId]
+    );
+    
+    if (userRows.length === 0 || !userRows[0].api_key || !userRows[0].api_secret) {
+      return res.status(400).json({ success: false, error: 'API credentials not configured' });
+    }
+    
+    // TODO: Integrate actual Bybit API to set leverage
+    // const { HTTP } = require('pybit');
+    // const client = new HTTP({ api_key: userRows[0].api_key, api_secret: userRows[0].api_secret });
+    // await client.setLeverage({ category: 'linear', symbol: symbol, buyLeverage: leverage, sellLeverage: leverage });
+    
+    return res.json({ success: true, message: 'Leverage updated successfully' });
+  } catch (err) {
+    console.error('Set leverage error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to set leverage', message: err.message });
   }
 });
 

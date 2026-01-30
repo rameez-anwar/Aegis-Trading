@@ -3,6 +3,11 @@
 Real-time signal generator for ML models
 """
 
+import warnings
+# Suppress sklearn parallel warnings that clutter output
+warnings.filterwarnings('ignore', message='.*sklearn.utils.parallel.delayed.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn.utils.parallel')
+
 import configparser
 import pandas as pd
 import numpy as np
@@ -36,6 +41,9 @@ class SignalGenerator:
         
     def find_best_model(self, exchange: str, symbol: str, time_horizon: str) -> Optional[Dict[str, Any]]:
         """Find the best performing model for the given parameters"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
             query = text("""
                 SELECT id, model_name, exchange, symbol, time_horizon, table_name, final_pnl
@@ -46,6 +54,8 @@ class SignalGenerator:
                 ORDER BY final_pnl DESC
                 LIMIT 1
             """)
+            
+            logger.info(f"🔍 Searching for ML model: exchange={exchange.lower()}, symbol={symbol.lower()}, time_horizon={time_horizon}")
             
             with self.engine.connect() as conn:
                 result = conn.execute(query, {
@@ -66,21 +76,48 @@ class SignalGenerator:
                     'final_pnl': float(row[6])
                 }
                 
+                logger.info(f"✅ Found ML model: {model_info['model_name']} (PnL: {model_info['final_pnl']:.2f})")
+                
                 # Debug: Show model name mapping
                 base_learner_model_name = model_info['model_name']
                 if not model_info['model_name'].endswith('_model'):
                     base_learner_model_name = f"{model_info['model_name']}_model"
                 
-                print(f"Database model name: {model_info['model_name']}")
-                print(f"Mapped to base_learner name: {base_learner_model_name}")
-                print(f"Available base_learner models: {list(self.base_learner.models.keys())}")
+                logger.debug(f"Database model name: {model_info['model_name']}")
+                logger.debug(f"Mapped to base_learner name: {base_learner_model_name}")
+                logger.debug(f"Available base_learner models: {list(self.base_learner.models.keys())}")
                 
                 return model_info
             else:
+                # Check if any models exist for this symbol/timeframe with different exchange
+                check_query = text("""
+                    SELECT COUNT(*) as count, 
+                           STRING_AGG(DISTINCT exchange, ', ') as exchanges,
+                           STRING_AGG(DISTINCT symbol, ', ') as symbols
+                    FROM ml_summary.ml_summary 
+                    WHERE symbol = :symbol AND time_horizon = :time_horizon
+                """)
+                
+                with self.engine.connect() as conn:
+                    check_result = conn.execute(check_query, {
+                        'symbol': symbol.lower(),
+                        'time_horizon': time_horizon
+                    })
+                    check_row = check_result.fetchone()
+                
+                if check_row and check_row[0] > 0:
+                    logger.warning(f"❌ No ML model found for {exchange.lower()}/{symbol.lower()}/{time_horizon}")
+                    logger.warning(f"   But found {check_row[0]} model(s) for symbol={symbol.lower()}, timeframe={time_horizon}")
+                    logger.warning(f"   Available exchanges: {check_row[1]}")
+                    logger.warning(f"   Available symbols: {check_row[2]}")
+                else:
+                    logger.warning(f"❌ No ML model found for {exchange.lower()}/{symbol.lower()}/{time_horizon}")
+                    logger.warning(f"   No models exist for this symbol/timeframe combination")
+                
                 return None
                 
         except Exception as e:
-            print(f"Error finding best model: {str(e)}")
+            logger.error(f"❌ Error finding best model: {e}", exc_info=True)
             return None
     
     def load_model_from_pkl(self, model_name: str, exchange: str, symbol: str, time_horizon: str) -> bool:

@@ -4,6 +4,11 @@ Unified Signal Generator and Trading System
 Combines Strategy and ML signals for automated trading on Bybit
 """
 
+import warnings
+# Suppress sklearn parallel warnings that clutter output
+warnings.filterwarnings('ignore', message='.*sklearn.utils.parallel.delayed.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn.utils.parallel')
+
 import os
 import sys
 import pandas as pd
@@ -81,6 +86,81 @@ class UnifiedSignalGenerator:
     def get_ledger_table_name(self, user_id: int, strategy_config: Dict[str, Any]) -> str:
         """Generate consistent ledger table name"""
         return f"user_{user_id}_{strategy_config['name']}"
+    
+    def ensure_ledger_table_exists(self, user_id: int, strategy_config: Dict[str, Any]):
+        """Ensure ledger table exists, create if it doesn't"""
+        try:
+            table_name = self.get_ledger_table_name(user_id, strategy_config)
+            full_table_name = f"execution.{table_name}"
+            
+            # Check if table exists in database
+            check_query = text(f"""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'execution' 
+                    AND table_name = :table_name
+                )
+            """)
+            
+            table_exists = False
+            with self.engine.connect() as conn:
+                result = conn.execute(check_query, {'table_name': table_name})
+                table_exists = result.fetchone()[0]
+            
+            # Check if table already exists in MetaData or database
+            if not table_exists and table_name not in self.metadata.tables:
+                # Create table if not exists - matching CSV format exactly
+                ledger_table = Table(
+                    table_name,
+                    self.metadata,
+                    Column('datetime', DateTime, primary_key=True),
+                    Column('predicted_direction', String),  # 'long', 'short', 'neutral'
+                    Column('action', String),  # 'buy', 'sell - take_profit', 'sell - direction change', 'same direction', 'manually_closed'
+                    Column('buy_price', Float),
+                    Column('sell_price', Float),
+                    Column('pnl_percent', Float),  # Single trade PnL
+                    Column('pnl_sum', Float),  # Cumulative PnL
+                    Column('balance', Float),
+                    Column('trade_amount', Float),  # Amount used for this specific trade
+                    Column('order_id', String),  # Order ID from Bybit
+                    schema='execution',
+                    extend_existing=True
+                )
+                
+                # Create table if not exists
+                self.metadata.create_all(self.engine, tables=[ledger_table])
+                logger.info(f"Created ledger table: {full_table_name}")
+        except Exception as e:
+            logger.error(f"Error ensuring ledger table exists: {e}")
+    
+    def get_last_pnl_sum(self, user_id: int, strategy_config: Dict[str, Any]) -> float:
+        """Get the last pnl_sum from ledger table, return 0.0 if table doesn't exist or is empty"""
+        try:
+            # Ensure table exists first
+            self.ensure_ledger_table_exists(user_id, strategy_config)
+            
+            table_name = self.get_ledger_table_name(user_id, strategy_config)
+            last_pnl_query = text(f"""
+                SELECT pnl_sum FROM execution.{table_name} 
+                ORDER BY datetime DESC LIMIT 1
+            """)
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(last_pnl_query)
+                row = result.fetchone()
+                if row and row[0] is not None:
+                    return float(row[0])
+                else:
+                    return 0.0
+        except Exception as e:
+            # If table doesn't exist, ensure it's created and return 0.0
+            logger.warning(f"Could not get last pnl_sum from ledger (table may not exist yet): {e}")
+            try:
+                # Try to ensure table exists one more time
+                self.ensure_ledger_table_exists(user_id, strategy_config)
+            except:
+                pass
+            return 0.0
     
     def get_user_config(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Get user configuration from database"""
@@ -493,6 +573,8 @@ class UnifiedSignalGenerator:
     def generate_ml_signal(self, strategy_config: Dict[str, Any]) -> Optional[int]:
         """Generate signal from ML model using existing MLSignalGenerator"""
         try:
+            logger.info(f"🔍 Starting ML signal generation for {strategy_config['exchange']}/{strategy_config['symbol']}/{strategy_config['time_horizon']}")
+            
             # Find best ML model for this configuration
             best_model = self.ml_generator.find_best_model(
                 strategy_config['exchange'],
@@ -501,8 +583,11 @@ class UnifiedSignalGenerator:
             )
             
             if best_model is None:
-                logger.warning(f"No ML model found for {strategy_config['exchange']}/{strategy_config['symbol']}/{strategy_config['time_horizon']}")
+                logger.warning(f"❌ No ML model found for {strategy_config['exchange']}/{strategy_config['symbol']}/{strategy_config['time_horizon']}")
+                logger.warning(f"   Please ensure a trained ML model exists for this configuration")
                 return None
+            
+            logger.info(f"✅ Found ML model: {best_model.get('model_name', 'Unknown')}")
             
             # Load model - fix the path to use the correct structure
             model_name = best_model['model_name']
@@ -526,8 +611,12 @@ class UnifiedSignalGenerator:
                     break
             
             if model_path is None:
-                logger.error(f"Failed to find ML model file: {model_name} in any of the paths: {possible_paths}")
+                logger.error(f"❌ Failed to find ML model file: {model_name}")
+                logger.error(f"   Searched paths: {possible_paths}")
+                logger.error(f"   Current working directory: {os.getcwd()}")
                 return None
+            
+            logger.info(f"📁 Found model file at: {model_path}")
             
             # Load the model directly
             try:
@@ -604,14 +693,21 @@ class UnifiedSignalGenerator:
             )
             
             if data is None:
-                logger.error("Failed to get data for ML signal generation")
+                logger.error(f"❌ Failed to get data for ML signal generation")
+                logger.error(f"   Exchange: {strategy_config['exchange']}, Symbol: {strategy_config['symbol']}, Timeframe: {strategy_config['time_horizon']}")
+                logger.error(f"   Lookback period: {lookback + 10}")
                 return None
             
+            logger.info(f"✅ Retrieved data for ML signal generation: {len(data)} rows")
+            
             # Generate signal
+            logger.info(f"🔄 Generating ML signal using model: {model_name}")
             signal, percent_change, signal_text = self.ml_generator.generate_current_signal(
                 model_name,
                 data
             )
+            
+            logger.info(f"📊 ML signal generation result: signal={signal}, percent_change={percent_change:.2f}%, text={signal_text}")
             
             # Ensure we get proper signal values
             if signal == 1:
@@ -628,7 +724,8 @@ class UnifiedSignalGenerator:
                 return 0  # Default to neutral
             
         except Exception as e:
-            logger.error(f"Error generating ML signal: {e}")
+            logger.error(f"❌ Error generating ML signal: {e}", exc_info=True)
+            logger.error(f"   Configuration: {strategy_config['exchange']}/{strategy_config['symbol']}/{strategy_config['time_horizon']}")
             return None
     
     def combine_signals(self, strategy_signal: Optional[int], ml_signal: Optional[int]) -> int:
@@ -981,22 +1078,26 @@ class UnifiedSignalGenerator:
             current_datetime = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
             # Check if this exact entry already exists to prevent duplicates
-            check_query = text(f"""
-                SELECT COUNT(*) FROM execution.{table_name} 
-                WHERE order_id = :order_id 
-                AND action = :action 
-                AND buy_price = :buy_price 
-                AND sell_price = :sell_price
-            """)
-            
-            with self.engine.connect() as conn:
-                result = conn.execute(check_query, {
-                    'order_id': order_id,
-                    'action': action_str,
-                    'buy_price': native_entry_price,
-                    'sell_price': native_exit_price
-                })
-                count = result.fetchone()[0]
+            try:
+                check_query = text(f"""
+                    SELECT COUNT(*) FROM execution.{table_name} 
+                    WHERE order_id = :order_id 
+                    AND action = :action 
+                    AND buy_price = :buy_price 
+                    AND sell_price = :sell_price
+                """)
+                
+                with self.engine.connect() as conn:
+                    result = conn.execute(check_query, {
+                        'order_id': order_id,
+                        'action': action_str,
+                        'buy_price': native_entry_price,
+                        'sell_price': native_exit_price
+                    })
+                    count = result.fetchone()[0]
+            except Exception as e:
+                logger.warning(f"Could not check for duplicates (table may not exist yet): {e}")
+                count = 0
                 if count > 0:
                     logger.info(f"Entry already exists for order_id={order_id}, action={action_str} - skipping duplicate")
                     return
@@ -1339,19 +1440,7 @@ class UnifiedSignalGenerator:
                 self.ledger_data[ledger_key] = {'pnl_sum': 0.0, 'last_trade_amount': 1000.0}
             
             # Get the last pnl_sum from ledger to ensure we're adding to the correct value
-            table_name = self.get_ledger_table_name(user_id, strategy_config)
-            last_pnl_query = text(f"""
-                SELECT pnl_sum FROM execution.{table_name} 
-                ORDER BY datetime DESC LIMIT 1
-            """)
-            
-            with self.engine.connect() as conn:
-                result = conn.execute(last_pnl_query)
-                row = result.fetchone()
-                if row:
-                    last_pnl_sum = float(row[0])
-                else:
-                    last_pnl_sum = 0.0
+            last_pnl_sum = self.get_last_pnl_sum(user_id, strategy_config)
             
             # Update pnl_sum by adding to the last value (fee will be added in update_ledger)
             new_pnl_sum = last_pnl_sum + pnl_percent
@@ -1491,19 +1580,7 @@ class UnifiedSignalGenerator:
                 self.ledger_data[ledger_key] = {'pnl_sum': 0.0, 'last_trade_amount': 1000.0}
             
             # Get the last pnl_sum from ledger to ensure we're adding to the correct value
-            table_name = self.get_ledger_table_name(user_id, strategy_config)
-            last_pnl_query = text(f"""
-                SELECT pnl_sum FROM execution.{table_name} 
-                ORDER BY datetime DESC LIMIT 1
-            """)
-            
-            with self.engine.connect() as conn:
-                result = conn.execute(last_pnl_query)
-                row = result.fetchone()
-                if row:
-                    last_pnl_sum = float(row[0])
-                else:
-                    last_pnl_sum = 0.0
+            last_pnl_sum = self.get_last_pnl_sum(user_id, strategy_config)
             
             # Update pnl_sum by adding to the last value
             new_pnl_sum = last_pnl_sum + pnl_percent
@@ -1532,6 +1609,9 @@ class UnifiedSignalGenerator:
     def check_old_trades_from_ledger(self, client: HTTP, user_id: int, strategy_config: Dict[str, Any]) -> bool:
         """Check old trades from ledger using order_id and update their status"""
         try:
+            # Ensure table exists first
+            self.ensure_ledger_table_exists(user_id, strategy_config)
+            
             # Get the ledger table name
             table_name = self.get_ledger_table_name(user_id, strategy_config)
             
@@ -1559,18 +1639,22 @@ class UnifiedSignalGenerator:
                     logger.info(f"Found old trade in ledger: order_id={order_id}, buy_price={buy_price}")
                     
                     # Check if this trade has already been processed (has a closing entry)
-                    check_closed_query = text(f"""
-                        SELECT COUNT(*) FROM execution.{table_name} 
-                        WHERE order_id = :order_id 
-                        AND action IN ('sell - take_profit', 'sell - stop_loss', 'sell - direction change', 'manually_closed')
-                    """)
-                    
-                    with self.engine.connect() as conn:
-                        result = conn.execute(check_closed_query, {'order_id': order_id})
-                        count = result.fetchone()[0]
-                        if count > 0:
-                            logger.info(f"Trade {order_id} has already been processed (found {count} closing entries)")
-                            return False
+                    try:
+                        check_closed_query = text(f"""
+                            SELECT COUNT(*) FROM execution.{table_name} 
+                            WHERE order_id = :order_id 
+                            AND action IN ('sell - take_profit', 'sell - stop_loss', 'sell - direction change', 'manually_closed')
+                        """)
+                        
+                        with self.engine.connect() as conn:
+                            result = conn.execute(check_closed_query, {'order_id': order_id})
+                            count = result.fetchone()[0]
+                            if count > 0:
+                                logger.info(f"Trade {order_id} has already been processed (found {count} closing entries)")
+                                return False
+                    except Exception as e:
+                        logger.warning(f"Could not check if trade is closed: {e}")
+                        # Continue processing if we can't check
                     
                     # Check if this order was executed and closed
                     symbol = f"{strategy_config['symbol'].upper()}USDT"
@@ -1698,18 +1782,7 @@ class UnifiedSignalGenerator:
                             new_balance = self.get_account_balance(client)
                             
                             # Get the last pnl_sum from ledger to ensure we're adding to the correct value
-                            last_pnl_query = text(f"""
-                                SELECT pnl_sum FROM execution.{table_name} 
-                                ORDER BY datetime DESC LIMIT 1
-                            """)
-                            
-                            with self.engine.connect() as conn:
-                                result = conn.execute(last_pnl_query)
-                                row = result.fetchone()
-                                if row:
-                                    last_pnl_sum = float(row[0])
-                                else:
-                                    last_pnl_sum = 0.0
+                            last_pnl_sum = self.get_last_pnl_sum(user_id, strategy_config)
                             
                             # Update pnl_sum by adding to the last value
                             new_pnl_sum = last_pnl_sum + pnl_percent
@@ -1778,18 +1851,7 @@ class UnifiedSignalGenerator:
                                 new_balance = self.get_account_balance(client)
                                 
                                 # Get the last pnl_sum from ledger to ensure we're adding to the correct value
-                                last_pnl_query = text(f"""
-                                    SELECT pnl_sum FROM execution.{table_name} 
-                                    ORDER BY datetime DESC LIMIT 1
-                                """)
-                                
-                                with self.engine.connect() as conn:
-                                    result = conn.execute(last_pnl_query)
-                                    row = result.fetchone()
-                                    if row:
-                                        last_pnl_sum = float(row[0])
-                                    else:
-                                        last_pnl_sum = 0.0
+                                last_pnl_sum = self.get_last_pnl_sum(user_id, strategy_config)
                                 
                                 # Update pnl_sum by adding to the last value
                                 new_pnl_sum = last_pnl_sum + pnl_percent
@@ -1853,18 +1915,7 @@ class UnifiedSignalGenerator:
                         new_balance = self.get_account_balance(client)
                         
                         # Get the last pnl_sum from ledger to ensure we're adding to the correct value
-                        last_pnl_query = text(f"""
-                            SELECT pnl_sum FROM execution.{table_name} 
-                            ORDER BY datetime DESC LIMIT 1
-                        """)
-                        
-                        with self.engine.connect() as conn:
-                            result = conn.execute(last_pnl_query)
-                            row = result.fetchone()
-                            if row:
-                                last_pnl_sum = float(row[0])
-                            else:
-                                last_pnl_sum = 0.0
+                        last_pnl_sum = self.get_last_pnl_sum(user_id, strategy_config)
                         
                         # Update pnl_sum by adding to the last value (fee will be added in update_ledger)
                         new_pnl_sum = last_pnl_sum + pnl_percent
@@ -1943,20 +1994,21 @@ class UnifiedSignalGenerator:
                 
                 # Generate signals using existing generators
                 strategy_signal = self.generate_strategy_signal(strategy_config)
-                
-                # HARD CODE LONG SIGNAL FOR BTC TESTING
-                if strategy_config['symbol'].upper() == 'BTC':
-                    logger.info("🔧 HARD CODING LONG SIGNAL FOR BTC TESTING")
-                    strategy_signal = 1  # Force long signal
-                    logger.info(f"Hard-coded BTC signal: {strategy_signal}")
+                logger.info(f"📈 Strategy signal for {symbol}: {strategy_signal}")
                 
                 if user_config['use_ml']:
+                    logger.info(f"🤖 ML enabled for {symbol} ({strategy_config['exchange']}/{strategy_config['symbol']}/{strategy_config['time_horizon']}), generating ML signal...")
                     ml_signal = self.generate_ml_signal(strategy_config)
-                    combined_signal = self.combine_signals(strategy_signal, ml_signal)
-                    logger.info(f"Combined signal for {symbol}: {combined_signal}")
+                    if ml_signal is None:
+                        logger.warning(f"⚠️ ML signal generation failed or returned None for {symbol}")
+                        logger.warning(f"   Falling back to strategy-only signal: {strategy_signal}")
+                        combined_signal = strategy_signal if strategy_signal is not None else 0
+                    else:
+                        combined_signal = self.combine_signals(strategy_signal, ml_signal)
+                        logger.info(f"✅ Combined signal for {symbol}: Strategy={strategy_signal}, ML={ml_signal}, Combined={combined_signal}")
                 else:
-                    combined_signal = strategy_signal
-                    logger.info(f"Strategy-only signal for {symbol}: {combined_signal}")
+                    combined_signal = strategy_signal if strategy_signal is not None else 0
+                    logger.info(f"📊 Strategy-only signal for {symbol}: {combined_signal}")
                 
                 # Define position_key at the beginning
                 position_key = f"{user_id}_{strategy_config['name']}"
@@ -2043,19 +2095,7 @@ class UnifiedSignalGenerator:
                                 self.ledger_data[ledger_key] = {'pnl_sum': 0.0, 'last_trade_amount': 1000.0}
                             
                             # Get the last pnl_sum from ledger to ensure we're adding to the correct value
-                            table_name = self.get_ledger_table_name(user_id, strategy_config)
-                            last_pnl_query = text(f"""
-                                SELECT pnl_sum FROM execution.{table_name} 
-                                ORDER BY datetime DESC LIMIT 1
-                            """)
-                            
-                            with self.engine.connect() as conn:
-                                result = conn.execute(last_pnl_query)
-                                row = result.fetchone()
-                                if row:
-                                    last_pnl_sum = float(row[0])
-                                else:
-                                    last_pnl_sum = 0.0
+                            last_pnl_sum = self.get_last_pnl_sum(user_id, strategy_config)
                             
                             # Update pnl_sum by adding to the last value (fee will be added in update_ledger)
                             new_pnl_sum = last_pnl_sum + pnl_percent
@@ -2524,19 +2564,7 @@ class UnifiedSignalGenerator:
                 self.ledger_data[ledger_key] = {'pnl_sum': 0.0, 'last_trade_amount': 1000.0}
             
             # Get the last pnl_sum from ledger to ensure we're adding to the correct value
-            table_name = self.get_ledger_table_name(user_id, strategy_config)
-            last_pnl_query = text(f"""
-                SELECT pnl_sum FROM execution.{table_name} 
-                ORDER BY datetime DESC LIMIT 1
-            """)
-            
-            with self.engine.connect() as conn:
-                result = conn.execute(last_pnl_query)
-                row = result.fetchone()
-                if row:
-                    last_pnl_sum = float(row[0])
-                else:
-                    last_pnl_sum = 0.0
+            last_pnl_sum = self.get_last_pnl_sum(user_id, strategy_config)
             
             # Update pnl_sum by adding to the last value (fee will be added in update_ledger)
             new_pnl_sum = last_pnl_sum + pnl_percent

@@ -3,6 +3,15 @@
 Main script for ML-based cryptocurrency signal generation and backtesting
 """
 
+import warnings
+# Suppress sklearn parallel warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn.utils.parallel')
+
+import warnings
+# Suppress sklearn parallel warnings that clutter output
+warnings.filterwarnings('ignore', message='.*sklearn.utils.parallel.delayed.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn.utils.parallel')
+
 import configparser
 import pandas as pd
 import numpy as np

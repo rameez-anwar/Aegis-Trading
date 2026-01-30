@@ -1,3 +1,8 @@
+import warnings
+# Suppress sklearn parallel warnings that clutter output
+warnings.filterwarnings('ignore', message='.*sklearn.utils.parallel.delayed.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn.utils.parallel')
+
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Tuple

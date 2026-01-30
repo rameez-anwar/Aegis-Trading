@@ -192,11 +192,6 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Machine Learning models
-ml/models/
-*.pkl
-*.pickle
-*.joblib
 
 # Trading data
 backtest/results/

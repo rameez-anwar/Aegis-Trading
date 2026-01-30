@@ -11,6 +11,7 @@ import time
 import logging
 import pandas as pd
 import json
+import threading
 from typing import List, Optional
 from sqlalchemy import text
 
@@ -36,42 +37,80 @@ class TradingExecutor:
         """Initialize trading executor"""
         self.unified_generator = UnifiedSignalGenerator()
     
-    def run_single_user(self, user_id: int):
+    def run_single_user(self, user_id: int, use_thread: bool = False):
         """Run trading for a single user"""
-        try:
-            logger.info(f"Starting trading for user {user_id}")
-            
-            # Get user configuration
-            user_config = self.unified_generator.get_user_config(user_id)
-            if user_config is None:
-                logger.error(f"User {user_id} not found or invalid configuration")
-                return False
-            
-            # Validate user configuration
-            if not user_config['strategies']:
-                logger.error(f"User {user_id} has no strategies configured")
-                return False
-            
-            if not user_config['api_key'] or not user_config['api_secret']:
-                logger.error(f"User {user_id} has invalid API credentials")
-                return False
-            
-            logger.info(f"User configuration validated for {user_config['name']}")
-            logger.info(f"Strategies: {user_config['strategies']}")
-            logger.info(f"Use ML: {user_config['use_ml']}")
-            
-            # Run continuous trading
-            self.unified_generator.run_continuous_trading(user_id)
+        def user_trading_thread():
+            """Thread function to run trading for a user"""
+            try:
+                logger.info(f"[User {user_id}] Starting trading thread")
+                
+                # Get user configuration
+                user_config = self.unified_generator.get_user_config(user_id)
+                if user_config is None:
+                    logger.error(f"[User {user_id}] User not found or invalid configuration")
+                    return
+                
+                # Validate user configuration
+                if not user_config['strategies']:
+                    logger.error(f"[User {user_id}] User has no strategies configured")
+                    return
+                
+                if not user_config['api_key'] or not user_config['api_secret']:
+                    logger.error(f"[User {user_id}] User has invalid API credentials")
+                    return
+                
+                logger.info(f"[User {user_id}] User configuration validated for {user_config['name']}")
+                logger.info(f"[User {user_id}] Strategies: {user_config['strategies']}")
+                logger.info(f"[User {user_id}] Use ML: {user_config['use_ml']}")
+                
+                # Run continuous trading (this will block until stopped)
+                self.unified_generator.run_continuous_trading(user_id)
+                
+            except Exception as e:
+                logger.error(f"[User {user_id}] Error in trading thread: {e}", exc_info=True)
+        
+        if use_thread:
+            # Start thread for this user (for parallel execution)
+            thread = threading.Thread(target=user_trading_thread, daemon=True, name=f"User-{user_id}")
+            thread.start()
+            logger.info(f"[User {user_id}] Trading thread started")
             return True
-            
-        except Exception as e:
-            logger.error(f"Error running trading for user {user_id}: {e}")
-            return False
+        else:
+            # Run directly (blocking, for single user mode)
+            try:
+                logger.info(f"Starting trading for user {user_id}")
+                
+                # Get user configuration
+                user_config = self.unified_generator.get_user_config(user_id)
+                if user_config is None:
+                    logger.error(f"User {user_id} not found or invalid configuration")
+                    return False
+                
+                # Validate user configuration
+                if not user_config['strategies']:
+                    logger.error(f"User {user_id} has no strategies configured")
+                    return False
+                
+                if not user_config['api_key'] or not user_config['api_secret']:
+                    logger.error(f"User {user_id} has invalid API credentials")
+                    return False
+                
+                logger.info(f"User configuration validated for {user_config['name']}")
+                logger.info(f"Strategies: {user_config['strategies']}")
+                logger.info(f"Use ML: {user_config['use_ml']}")
+                
+                # Run continuous trading (this will block)
+                self.unified_generator.run_continuous_trading(user_id)
+                return True
+                
+            except Exception as e:
+                logger.error(f"Error running trading for user {user_id}: {e}")
+                return False
     
     def run_all_users(self):
-        """Run trading for all users"""
+        """Run trading for all users simultaneously in separate threads"""
         try:
-            logger.info("Starting trading for all users")
+            logger.info("Starting trading for all users simultaneously")
             
             # Get all users from database
             query = text("SELECT id FROM users.users ORDER BY id")
@@ -83,39 +122,68 @@ class TradingExecutor:
                 logger.warning("No users found in database")
                 return False
             
-            logger.info(f"Found {len(user_ids)} users")
+            logger.info(f"Found {len(user_ids)} users - starting all trading threads simultaneously")
             
-            # Run trading for each user
+            # Start all users in parallel threads
+            threads_started = 0
             for user_id in user_ids:
-                logger.info(f"Starting trading for user {user_id}")
-                
                 try:
-                    self.run_single_user(user_id)
+                    logger.info(f"Starting trading thread for user {user_id}")
+                    self.run_single_user(user_id, use_thread=True)
+                    threads_started += 1
+                    time.sleep(0.5)  # Small delay to avoid overwhelming the system
                 except Exception as e:
-                    logger.error(f"Error running trading for user {user_id}: {e}")
+                    logger.error(f"Error starting trading thread for user {user_id}: {e}")
                     continue
             
-            return True
+            logger.info(f"Successfully started {threads_started}/{len(user_ids)} trading threads")
+            logger.info("All users are now running simultaneously. Press Ctrl+C to stop all.")
+            
+            # Keep main thread alive to allow background threads to run
+            try:
+                while True:
+                    time.sleep(60)  # Check every minute
+                    # Log thread status
+                    active_threads = [t for t in threading.enumerate() if t.name.startswith("User-")]
+                    logger.info(f"Active trading threads: {len(active_threads)}")
+            except KeyboardInterrupt:
+                logger.info("Stopping all trading threads...")
+                return True
             
         except Exception as e:
             logger.error(f"Error running trading for all users: {e}")
             return False
     
     def run_user_batch(self, user_ids: List[int]):
-        """Run trading for a batch of users"""
+        """Run trading for a batch of users simultaneously in separate threads"""
         try:
-            logger.info(f"Starting trading for user batch: {user_ids}")
+            logger.info(f"Starting trading for user batch simultaneously: {user_ids}")
             
+            # Start all users in parallel threads
+            threads_started = 0
             for user_id in user_ids:
-                logger.info(f"Starting trading for user {user_id}")
-                
                 try:
-                    self.run_single_user(user_id)
+                    logger.info(f"Starting trading thread for user {user_id}")
+                    self.run_single_user(user_id, use_thread=True)
+                    threads_started += 1
+                    time.sleep(0.5)  # Small delay to avoid overwhelming the system
                 except Exception as e:
-                    logger.error(f"Error running trading for user {user_id}: {e}")
+                    logger.error(f"Error starting trading thread for user {user_id}: {e}")
                     continue
             
-            return True
+            logger.info(f"Successfully started {threads_started}/{len(user_ids)} trading threads")
+            logger.info("All users in batch are now running simultaneously. Press Ctrl+C to stop all.")
+            
+            # Keep main thread alive to allow background threads to run
+            try:
+                while True:
+                    time.sleep(60)  # Check every minute
+                    # Log thread status
+                    active_threads = [t for t in threading.enumerate() if t.name.startswith("User-")]
+                    logger.info(f"Active trading threads: {len(active_threads)}")
+            except KeyboardInterrupt:
+                logger.info("Stopping all trading threads...")
+                return True
             
         except Exception as e:
             logger.error(f"Error running trading for user batch: {e}")
