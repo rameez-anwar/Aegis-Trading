@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const { Pool } = require('pg');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
@@ -27,6 +28,48 @@ async function fetchJson(url) {
     throw new Error(`HTTP ${res.status} ${res.statusText} - ${text}`.trim());
   }
   return await res.json();
+}
+
+function getBybitBaseUrl() {
+  // Your python execution is using demo. Keep frontend consistent by defaulting to demo too.
+  // Override with BYBIT_BASE_URL if you want mainnet/testnet.
+  return process.env.BYBIT_BASE_URL || 'https://api-demo.bybit.com';
+}
+
+function bybitSign(secret, payload) {
+  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+}
+
+async function bybitRequest({ apiKey, apiSecret, method, endpointPath, queryParams, body }) {
+  const baseUrl = getBybitBaseUrl();
+  const url = new URL(`${baseUrl}${endpointPath}`);
+  if (queryParams) {
+    for (const [k, v] of Object.entries(queryParams)) {
+      if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
+    }
+  }
+
+  const timestamp = String(Date.now());
+  const recvWindow = String(process.env.BYBIT_RECV_WINDOW || 60000);
+  const bodyStr = body ? JSON.stringify(body) : '';
+
+  // Bybit v5 signature: sign = HMAC_SHA256(secret, timestamp + apiKey + recvWindow + (queryString or body))
+  const queryString = url.searchParams.toString();
+  const paramStr = method === 'GET' ? queryString : bodyStr;
+  const payload = `${timestamp}${apiKey}${recvWindow}${paramStr}`;
+  const sign = bybitSign(apiSecret, payload);
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-BAPI-API-KEY': apiKey,
+    'X-BAPI-SIGN': sign,
+    'X-BAPI-TIMESTAMP': timestamp,
+    'X-BAPI-RECV-WINDOW': recvWindow,
+  };
+
+  const res = await fetch(url.toString(), { method, headers, body: method === 'GET' ? undefined : bodyStr });
+  const data = await res.json().catch(() => ({}));
+  return { status: res.status, ok: res.ok, data };
 }
 
 // Database connection
@@ -843,7 +886,7 @@ app.get('/api/me/execution/ledger', authMiddleware, async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 1000, 20000);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     const query = `
-      SELECT datetime, predicted_direction, action, buy_price, sell_price, pnl_percent, pnl_sum, balance, trade_amount, order_id
+      SELECT datetime, predicted_direction, action, buy_price, sell_price, pnl_percent, balance, trade_amount, order_id
       FROM ${fullTable}
       ORDER BY datetime ASC
       LIMIT ${limit} OFFSET ${offset}
@@ -860,7 +903,6 @@ app.get('/api/me/execution/ledger', authMiddleware, async (req, res) => {
       buy_price: parseFloat(row.buy_price || 0),
       sell_price: parseFloat(row.sell_price || 0),
       pnl_percent: parseFloat(row.pnl_percent || 0),
-      pnl_sum: parseFloat(row.pnl_sum || 0),
       balance: parseFloat(row.balance || 0),
       trade_amount: parseFloat(row.trade_amount || 0),
       order_id: row.order_id || null
@@ -2350,16 +2392,45 @@ app.get('/api/me/positions', authMiddleware, async (req, res) => {
     if (userRows.length === 0 || !userRows[0].api_key || !userRows[0].api_secret) {
       return res.json({ success: true, data: [] });
     }
-    
-    // For now, return mock data structure - replace with actual Bybit API calls
-    // You'll need to integrate pybit or similar library here
-    const positions = [];
-    
-    // TODO: Integrate actual Bybit API to get positions
-    // const { HTTP } = require('pybit');
-    // const client = new HTTP({ api_key: userRows[0].api_key, api_secret: userRows[0].api_secret });
-    // const positionsResponse = await client.getPositions({ category: 'linear' });
-    
+
+    const apiKey = userRows[0].api_key;
+    const apiSecret = userRows[0].api_secret;
+
+    const { data } = await bybitRequest({
+      apiKey,
+      apiSecret,
+      method: 'GET',
+      endpointPath: '/v5/position/list',
+      queryParams: { category: 'linear', settleCoin: 'USDT' },
+    });
+
+    if (!data || data.retCode !== 0) {
+      return res.status(502).json({ success: false, error: 'Bybit positions fetch failed', details: data });
+    }
+
+    const list = data?.result?.list || [];
+    const positions = list
+      .map((p) => {
+        const size = parseFloat(p.size || 0);
+        if (!Number.isFinite(size) || size <= 0) return null;
+        const entry = parseFloat(p.avgPrice || p.entryPrice || 0);
+        const mark = parseFloat(p.markPrice || 0);
+        const leverage = parseFloat(p.leverage || 1);
+        const unrealized = parseFloat(p.unrealisedPnl || p.unrealizedPnl || 0);
+        const positionValue = p.positionValue != null ? parseFloat(p.positionValue) : (Number.isFinite(mark) ? size * mark : 0);
+        return {
+          symbol: p.symbol,
+          side: p.side,
+          size,
+          entry_price: Number.isFinite(entry) ? entry : 0,
+          mark_price: Number.isFinite(mark) ? mark : 0,
+          leverage: Number.isFinite(leverage) ? leverage : 1,
+          unrealized_pnl: Number.isFinite(unrealized) ? unrealized : 0,
+          position_value: Number.isFinite(positionValue) ? positionValue : 0,
+        };
+      })
+      .filter(Boolean);
+
     return res.json({ success: true, data: positions });
   } catch (err) {
     console.error('Get positions error:', err);
@@ -2382,21 +2453,36 @@ app.post('/api/me/positions/:symbol/close', authMiddleware, async (req, res) => 
     if (userRows.length === 0 || !userRows[0].api_key || !userRows[0].api_secret) {
       return res.status(400).json({ success: false, error: 'API credentials not configured' });
     }
-    
-    // TODO: Integrate actual Bybit API to close position
-    // const { HTTP } = require('pybit');
-    // const client = new HTTP({ api_key: userRows[0].api_key, api_secret: userRows[0].api_secret });
-    // const closeSide = side === 'Buy' ? 'Sell' : 'Buy';
-    // const response = await client.placeOrder({
-    //   category: 'linear',
-    //   symbol: symbol,
-    //   side: closeSide,
-    //   orderType: 'Market',
-    //   qty: qty,
-    //   reduceOnly: true
-    // });
-    
-    return res.json({ success: true, message: 'Position closed successfully' });
+
+    const apiKey = userRows[0].api_key;
+    const apiSecret = userRows[0].api_secret;
+    const closeSide = String(side || '').toLowerCase() === 'buy' ? 'Sell' : 'Buy';
+    const q = parseFloat(qty);
+    if (!symbol || !Number.isFinite(q) || q <= 0) {
+      return res.status(400).json({ success: false, error: 'symbol and qty are required' });
+    }
+
+    const { data } = await bybitRequest({
+      apiKey,
+      apiSecret,
+      method: 'POST',
+      endpointPath: '/v5/order/create',
+      body: {
+        category: 'linear',
+        symbol: String(symbol).toUpperCase(),
+        side: closeSide,
+        orderType: 'Market',
+        qty: String(q),
+        timeInForce: 'GTC',
+        reduceOnly: true,
+      },
+    });
+
+    if (!data || data.retCode !== 0) {
+      return res.status(502).json({ success: false, error: 'Bybit close order failed', details: data });
+    }
+
+    return res.json({ success: true, message: 'Close order placed', data: { orderId: data?.result?.orderId || null } });
   } catch (err) {
     console.error('Close position error:', err);
     return res.status(500).json({ success: false, error: 'Failed to close position', message: err.message });

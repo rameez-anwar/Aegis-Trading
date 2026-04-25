@@ -53,7 +53,7 @@ const Header = ({ activePage = 'simulator' }) => {
               <span>Home</span>
             </Link>
             <Link
-              to="/simulator"
+              to="/strategies"
               className={`px-6 py-3 text-sm font-semibold rounded-xl transition-all duration-300 ${
                 activePage === 'simulator'
                   ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 transform border border-blue-500/20'

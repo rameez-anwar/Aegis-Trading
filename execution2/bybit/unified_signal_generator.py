@@ -13,6 +13,7 @@ import logging
 import json
 import pickle
 from typing import Dict, Any, Optional, Tuple, List
+from decimal import Decimal, ROUND_DOWN, InvalidOperation
 from sqlalchemy import text, MetaData, Table, Column, String, DateTime, Float, Integer, Boolean, JSON
 from pybit.unified_trading import HTTP
 from dotenv import load_dotenv
@@ -60,6 +61,7 @@ class UnifiedSignalGenerator:
         self.trading_clients = {}
         self.ledger_data = {}  # Store ledger data per user/strategy
         self.last_signal_times = {}  # Track last signal generation time per strategy
+        self._user_config_log_ts = {}  # Throttle noisy "Loaded user config" logs per user
         
         # Initialize database tables
         self._init_database_tables()
@@ -203,8 +205,17 @@ class UnifiedSignalGenerator:
                     'created_at': row[8],
                     'updated_at': row[9]
                 }
-                
-                logger.info(f"Loaded user config for {user_config['name']}: {len(user_config['strategies'])} strategies, ML: {user_config['use_ml']}")
+
+                # Throttle: this function is called frequently (e.g. TP/SL monitor every 10s)
+                # so avoid spamming logs.
+                now = time.time()
+                last = self._user_config_log_ts.get(user_id, 0)
+                if now - last > 300:  # log at most once per 5 minutes per user
+                    logger.info(
+                        f"Loaded user config for {user_config['name']}: "
+                        f"{len(user_config['strategies'])} strategies, ML: {user_config['use_ml']}"
+                    )
+                    self._user_config_log_ts[user_id] = now
                 return user_config
             else:
                 logger.error(f"User {user_id} not found in database")
@@ -230,8 +241,15 @@ class UnifiedSignalGenerator:
                 sellLeverage=str(lev),
             )
 
-            if resp.get('retCode') == 0:
+            ret_code = resp.get('retCode')
+            if ret_code == 0:
                 logger.info(f"Leverage set to {lev}x for {symbol}")
+                return True
+
+            # Bybit returns 110043 when requested leverage equals current leverage.
+            # Treat it as success/no-op to avoid noisy logs.
+            if ret_code == 110043:
+                logger.info(f"Leverage already {lev}x for {symbol} (no change)")
                 return True
 
             logger.warning(f"Failed to set leverage for {symbol}: {resp}")
@@ -794,33 +812,54 @@ class UnifiedSignalGenerator:
             logger.error(f"Error combining signals: {e}")
             return 0  # Default to neutral 
     
-    def format_quantity(self, qty: float, symbol: str) -> float:
-        """Format quantity according to Bybit's requirements"""
+    def _format_decimal_to_step(self, value: float, step: float, minimum: float) -> Decimal:
+        """Round down to exchange step using Decimal (avoid float artifacts)."""
         try:
-            # Get symbol info for minimum quantity and step size
-            symbol_info = self._get_symbol_info(symbol)
-            min_qty = symbol_info.get('min_qty', 0.001)
-            qty_step = symbol_info.get('qty_step', 0.001)
-            
-            # Ensure quantity meets minimum requirement
-            if qty < min_qty:
-                qty = min_qty
-                logger.warning(f"Quantity {qty} below minimum {min_qty} for {symbol}, using minimum")
-            
-            # Round to step size
-            qty = round(qty / qty_step) * qty_step
-            
-            # Ensure we don't exceed reasonable limits
-            if qty > 1000000:  # 1M max quantity
-                qty = 1000000
-                logger.warning(f"Quantity too large for {symbol}, capping at 1M")
-            
-            logger.info(f"Formatted quantity for {symbol}: {qty}")
-            return qty
-            
-        except Exception as e:
-            logger.error(f"Error formatting quantity: {e}")
-            return qty  # Return original if formatting fails
+            v = Decimal(str(value))
+            s = Decimal(str(step))
+            m = Decimal(str(minimum))
+
+            if v < m:
+                v = m
+
+            if s > 0:
+                # Round DOWN to step to be safe for Bybit
+                q = (v / s).to_integral_value(rounding=ROUND_DOWN) * s
+            else:
+                q = v
+
+            # Cap extreme sizes
+            if q > Decimal('1000000'):
+                q = Decimal('1000000')
+
+            # Ensure still >= minimum after rounding down
+            if q < m:
+                q = m
+
+            return q
+        except (InvalidOperation, ValueError):
+            return Decimal(str(minimum))
+
+    def _decimal_to_str(self, d: Decimal) -> str:
+        """Convert Decimal to clean string (no scientific, no float noise)."""
+        s = format(d, 'f')
+        if '.' in s:
+            s = s.rstrip('0').rstrip('.')
+        return s if s else '0'
+
+    def format_quantity(self, qty: float, symbol: str) -> Tuple[float, str]:
+        """Format quantity for Bybit; returns (float_qty, string_qty)."""
+        # Get symbol info for minimum quantity and step size
+        symbol_info = self._get_symbol_info(symbol)
+        min_qty = symbol_info.get('min_qty', 0.001)
+        qty_step = symbol_info.get('qty_step', 0.001)
+
+        q_dec = self._format_decimal_to_step(qty, qty_step, min_qty)
+        q_str = self._decimal_to_str(q_dec)
+        q_float = float(q_dec)
+
+        logger.info(f"Formatted quantity for {symbol}: {q_str}")
+        return q_float, q_str
     
     def _get_symbol_info(self, symbol: str) -> Dict[str, Any]:
         """Get symbol information including minimum quantity and step size"""
@@ -848,8 +887,8 @@ class UnifiedSignalGenerator:
                    tp_price: Optional[float] = None, sl_price: Optional[float] = None) -> Optional[str]:
         """Place order with TP/SL"""
         try:
-            # Format quantity according to Bybit requirements
-            formatted_qty = self.format_quantity(qty, symbol)
+            # Format quantity according to Bybit requirements (string avoids float artifacts)
+            formatted_qty, formatted_qty_str = self.format_quantity(qty, symbol)
             
             # Get symbol info for price formatting
             symbol_info = self._get_symbol_info(symbol)
@@ -863,7 +902,7 @@ class UnifiedSignalGenerator:
                 "symbol": symbol,
                 "side": side,
                 "orderType": "Market",
-                "qty": str(formatted_qty),
+                "qty": formatted_qty_str,
                 "timeInForce": "GTC"
             }
             
@@ -877,7 +916,7 @@ class UnifiedSignalGenerator:
                 order_params["stopLoss"] = str(formatted_sl)
                 logger.info(f"Stop Loss: {formatted_sl}")
             
-            logger.info(f"Placing order: {side} {formatted_qty} {symbol}")
+            logger.info(f"Placing order: {side} {formatted_qty_str} {symbol}")
             logger.info(f"Order params: {order_params}")
             
             response = client.place_order(**order_params)
@@ -900,16 +939,16 @@ class UnifiedSignalGenerator:
             close_side = "Sell" if side == "Buy" else "Buy"
             
             # Format quantity according to Bybit requirements
-            formatted_qty = self.format_quantity(qty, symbol)
+            _, formatted_qty_str = self.format_quantity(qty, symbol)
             
-            logger.info(f"Closing position: {close_side} {formatted_qty} {symbol}")
+            logger.info(f"Closing position: {close_side} {formatted_qty_str} {symbol}")
             
             response = client.place_order(
                 category="linear",
                 symbol=symbol,
                 side=close_side,
                 orderType="Market",
-                qty=str(formatted_qty),
+                qty=formatted_qty_str,
                 timeInForce="GTC",
                 reduceOnly=True
             )
@@ -2175,7 +2214,7 @@ class UnifiedSignalGenerator:
                                 qty = position_size / current_price
                                 
                                 # Format quantity according to symbol requirements
-                                qty = self.format_quantity(qty, symbol)
+                                qty, _ = self.format_quantity(qty, symbol)
                                 
                                 # For XRP, ensure whole number quantity
                                 if 'XRP' in symbol:
@@ -2303,7 +2342,7 @@ class UnifiedSignalGenerator:
                     qty = position_size / current_price
                     
                     # Format quantity according to symbol requirements
-                    qty = self.format_quantity(qty, symbol)
+                    qty, _ = self.format_quantity(qty, symbol)
                     
                     # For XRP, ensure whole number quantity
                     if 'XRP' in symbol:

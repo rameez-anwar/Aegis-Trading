@@ -1519,6 +1519,7 @@ function App() {
       <Routes>
         <Route path="/" element={<Home />} />
           <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
+        <Route path="/strategies" element={<StrategyList />} />
         <Route path="/simulator" element={<StrategyList />} />
         <Route path="/strategy/:strategyName" element={<StrategyDetailWithRouter />} />
         <Route path="/user-management" element={<UserManagementWithRouter />} />

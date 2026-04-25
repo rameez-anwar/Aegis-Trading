@@ -278,7 +278,7 @@ const Account = () => {
                         : 'bg-gray-50 text-gray-700 border-gray-200'
                     }`}>
                       <Brain className="w-3.5 h-3.5" />
-                      <span>{profile.use_ml ? 'ML Enabled' : 'ML Disabled'}</span>
+                      <span>{profile.use_ml ? 'AI signals enabled' : 'AI signals disabled'}</span>
                     </div>
                   </div>
                 </div>
@@ -453,8 +453,8 @@ const Account = () => {
                           <Brain className="w-4 h-4 text-purple-600" />
                         </div>
                         <div>
-                          <span className="text-gray-900 font-medium block">ML Models</span>
-                          <span className="text-xs text-gray-500">Machine learning</span>
+                          <span className="text-gray-900 font-medium block">AI Models</span>
+                          <span className="text-xs text-gray-500">AI powered Signals</span>
                         </div>
                       </div>
                       <span className={`px-2.5 py-1 rounded text-xs font-medium ${
@@ -608,6 +608,16 @@ const Account = () => {
             <div className="mb-6">
               <h2 className="text-xl font-bold text-gray-900 mb-2">Leverage Management</h2>
               <p className="text-gray-600">Set leverage for your trading pairs</p>
+            </div>
+
+            <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex items-start space-x-3">
+              <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+              <div>
+                <div className="text-sm font-semibold text-red-800">Caution</div>
+                <div className="text-sm text-red-700">
+                  Higher leverage increases risk and can lead to liquidation. Use leverage responsibly.
+                </div>
+              </div>
             </div>
 
             {!profile.api_key ? (
@@ -766,7 +776,6 @@ const Account = () => {
                         <th className="px-3 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Buy Price</th>
                         <th className="px-3 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Sell Price</th>
                         <th className="px-3 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">PnL %</th>
-                        <th className="px-3 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">PnL Sum</th>
                         <th className="px-3 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Balance</th>
                         <th className="px-3 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Trade Amount</th>
                         <th className="px-3 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">Order ID</th>
@@ -813,14 +822,6 @@ const Account = () => {
                           }`}>
                             {row.pnl_percent !== null && row.pnl_percent !== undefined 
                               ? `${Number(row.pnl_percent) >= 0 ? '+' : ''}${Number(row.pnl_percent).toFixed(2)}%`
-                              : '-'
-                            }
-                          </td>
-                          <td className={`px-3 py-3 text-sm font-semibold whitespace-nowrap ${
-                            Number(row.pnl_sum || 0) >= 0 ? 'text-green-600' : 'text-red-600'
-                          }`}>
-                            {row.pnl_sum !== null && row.pnl_sum !== undefined 
-                              ? `${Number(row.pnl_sum) >= 0 ? '+' : ''}${Number(row.pnl_sum).toFixed(2)}`
                               : '-'
                             }
                           </td>
