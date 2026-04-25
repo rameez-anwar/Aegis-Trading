@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
-const { sendVerificationEmail } = require('./utils/sendEmail');
+const { sendVerificationEmail, sendPasswordResetEmail } = require('./utils/sendEmail');
 require('dotenv').config();
 
 const app = express();
@@ -91,6 +91,18 @@ async function ensureUserLeverageSettingsColumn() {
   } catch (e) {
     // Don't crash server startup if schema permissions are restricted; endpoints will error clearly.
     console.warn('Could not ensure leverage_settings column exists:', e.message);
+  }
+}
+
+async function ensureUserPasswordResetColumns() {
+  try {
+    await pool.query(`
+      ALTER TABLE users.users
+      ADD COLUMN IF NOT EXISTS password_reset_code TEXT,
+      ADD COLUMN IF NOT EXISTS password_reset_expires TIMESTAMPTZ
+    `);
+  } catch (e) {
+    console.warn('Could not ensure password reset columns exist:', e.message);
   }
 }
 
@@ -727,6 +739,84 @@ app.post('/api/auth/resend-verification', async (req, res) => {
   } catch (err) {
     console.error('Resend verification error:', err);
     return res.status(500).json({ success: false, error: 'Failed to resend verification code', message: err.message });
+  }
+});
+
+// Request password reset code
+app.post('/api/auth/request-password-reset', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+
+    const { rows } = await pool.query('SELECT id, email FROM users.users WHERE email = $1', [email]);
+
+    // Always return success to avoid account enumeration
+    if (rows.length === 0) {
+      return res.json({ success: true, message: 'If that email exists, a reset code has been sent.' });
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await pool.query(
+      `UPDATE users.users
+       SET password_reset_code = $1,
+           password_reset_expires = $2,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [code, expires, rows[0].id]
+    );
+
+    await sendPasswordResetEmail(email, code);
+
+    return res.json({ success: true, message: 'If that email exists, a reset code has been sent.' });
+  } catch (err) {
+    console.error('Request password reset error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to request password reset', message: err.message });
+  }
+});
+
+// Reset password using code
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { email, code, new_password } = req.body;
+    if (!email || !code || !new_password) {
+      return res.status(400).json({ success: false, error: 'Email, code and new_password are required' });
+    }
+
+    const { rows } = await pool.query(
+      'SELECT id, password_reset_code, password_reset_expires FROM users.users WHERE email = $1',
+      [email]
+    );
+    if (rows.length === 0) {
+      return res.status(400).json({ success: false, error: 'Invalid reset code' });
+    }
+
+    const user = rows[0];
+    if (!user.password_reset_code || String(user.password_reset_code) !== String(code)) {
+      return res.status(400).json({ success: false, error: 'Invalid reset code' });
+    }
+    if (!user.password_reset_expires || new Date(user.password_reset_expires) < new Date()) {
+      return res.status(400).json({ success: false, error: 'Reset code expired' });
+    }
+
+    const passwordHash = await bcrypt.hash(new_password, 10);
+    await pool.query(
+      `UPDATE users.users
+       SET password = $1,
+           password_reset_code = NULL,
+           password_reset_expires = NULL,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [passwordHash, user.id]
+    );
+
+    return res.json({ success: true, message: 'Password reset successfully. Please log in.' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to reset password', message: err.message });
   }
 });
 
@@ -2654,3 +2744,4 @@ app.listen(PORT, () => {
 
 // Best-effort schema upgrade
 ensureUserLeverageSettingsColumn();
+ensureUserPasswordResetColumns();

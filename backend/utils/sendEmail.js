@@ -113,7 +113,56 @@ async function sendVerificationEmail(to, code) {
   return sendEmail(to, 'Verify your Aegis Trading account', html);
 }
 
+/**
+ * Send password reset code
+ * @param {string} to - Recipient email address
+ * @param {string} code - 6-digit reset code
+ * @returns {Promise<void>}
+ */
+async function sendPasswordResetEmail(to, code) {
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+        .code { background: #fff; border: 2px dashed #0ea5e9; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0; }
+        .code-number { font-size: 32px; font-weight: bold; color: #0ea5e9; letter-spacing: 5px; }
+        .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>Password Reset</h1>
+        </div>
+        <div class="content">
+          <p>Hello,</p>
+          <p>We received a request to reset your <strong>Aegis Trading</strong> password.</p>
+          <p>Use the following code to reset your password:</p>
+          <div class="code">
+            <div class="code-number">${code}</div>
+          </div>
+          <p>This code will expire in <strong>10 minutes</strong>.</p>
+          <p>If you did not request a password reset, you can ignore this email.</p>
+        </div>
+        <div class="footer">
+          <p>© ${new Date().getFullYear()} Aegis Trading. All rights reserved.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return sendEmail(to, 'Reset your Aegis Trading password', html);
+}
+
 module.exports = {
   sendEmail,
   sendVerificationEmail,
+  sendPasswordResetEmail,
 };

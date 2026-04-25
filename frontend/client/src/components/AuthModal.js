@@ -21,6 +21,11 @@ const AuthModal = () => {
   const [error, setError] = useState(null);
   const [showVerification, setShowVerification] = useState(false);
   const [signupEmail, setSignupEmail] = useState('');
+  const [showReset, setShowReset] = useState(false);
+  const [resetStep, setResetStep] = useState('request'); // 'request' | 'confirm'
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
 
   useEffect(() => { if (showAuth) setActiveTab(authMode); }, [authMode, showAuth]);
 
@@ -61,6 +66,39 @@ const AuthModal = () => {
         setActiveTab('signup'); // Switch to signup tab to show verification
       }
     } finally { setLoading(false); }
+  };
+
+  const handleRequestReset = async (e) => {
+    e.preventDefault();
+    try {
+      setLoading(true); setError(null);
+      await axios.post('/api/auth/request-password-reset', { email: resetEmail });
+      setResetStep('confirm');
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to request password reset');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConfirmReset = async (e) => {
+    e.preventDefault();
+    try {
+      setLoading(true); setError(null);
+      await axios.post('/api/auth/reset-password', { email: resetEmail, code: resetCode, new_password: resetNewPassword });
+      // Back to login
+      setShowReset(false);
+      setResetStep('request');
+      setResetEmail('');
+      setResetCode('');
+      setResetNewPassword('');
+      setError('Password reset successful. Please sign in.');
+      setActiveTab('login');
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to reset password');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSignup = async (e) => {
@@ -134,6 +172,78 @@ const AuthModal = () => {
                 onVerified={handleVerificationComplete}
                 onCancel={handleCancelVerification}
               />
+            ) : showReset ? (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-lg font-bold text-gray-900">Reset password</h4>
+                  <button
+                    type="button"
+                    onClick={() => { setShowReset(false); setResetStep('request'); setError(null); }}
+                    className="text-sm font-semibold text-blue-600 hover:text-blue-800"
+                  >
+                    Back to sign in
+                  </button>
+                </div>
+
+                {resetStep === 'request' ? (
+                  <form onSubmit={handleRequestReset} className="space-y-5">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-2">Email</label>
+                      <input
+                        type="email"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm"
+                        placeholder="you@example.com"
+                        required
+                      />
+                    </div>
+                    <button type="submit" disabled={loading} className="w-full px-4 py-3 bg-gray-900 text-white rounded-xl font-semibold shadow hover:shadow-md transition-shadow disabled:opacity-50">
+                      {loading ? 'Sending code...' : 'Send reset code'}
+                    </button>
+                    <p className="text-xs text-gray-500 text-center">We’ll email you a 6‑digit code (valid for 10 minutes).</p>
+                  </form>
+                ) : (
+                  <form onSubmit={handleConfirmReset} className="space-y-5">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-2">Email</label>
+                      <input
+                        type="email"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm"
+                        placeholder="you@example.com"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-2">Reset code</label>
+                      <input
+                        type="text"
+                        value={resetCode}
+                        onChange={(e) => setResetCode(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm"
+                        placeholder="6-digit code"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-2">New password</label>
+                      <input
+                        type="password"
+                        value={resetNewPassword}
+                        onChange={(e) => setResetNewPassword(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm"
+                        placeholder="New password"
+                        required
+                      />
+                    </div>
+                    <button type="submit" disabled={loading} className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold shadow hover:shadow-md transition-shadow disabled:opacity-50">
+                      {loading ? 'Resetting...' : 'Reset password'}
+                    </button>
+                  </form>
+                )}
+              </div>
             ) : activeTab === 'login' ? (
               <div className="space-y-5">
                 <GoogleSignIn 
@@ -158,6 +268,13 @@ const AuthModal = () => {
                     <input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow shadow-sm" placeholder="••••••••" required />
                   </div>
                   <button type="submit" disabled={loading} className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold shadow hover:shadow-md transition-shadow disabled:opacity-50">{loading?'Signing in...':'Sign in'}</button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowReset(true); setResetStep('request'); setResetEmail(email || ''); setError(null); }}
+                    className="w-full text-sm font-semibold text-blue-700 hover:text-blue-900"
+                  >
+                    Forgot password?
+                  </button>
                   <p className="text-xs text-gray-500 text-center">By continuing, you agree to our Terms and Privacy Policy.</p>
                 </form>
               </div>
