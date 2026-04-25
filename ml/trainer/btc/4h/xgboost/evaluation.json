@@ -1,0 +1,18 @@
+{
+  "model": "xgboost_model",
+  "params": {
+    "lookback": 66,
+    "n_estimators": 33,
+    "max_depth": 6,
+    "learning_rate": 0.1341048247374583,
+    "artifact_dir": "trainer\\btc\\4h\\xgboost"
+  },
+  "metrics": {
+    "mse": 11833029.894078156,
+    "rmse": 3439.917134769115,
+    "mae": 1498.7409696138327,
+    "r2": 0.987541179019879,
+    "mape_percent": 2.5483753212787446,
+    "directional_accuracy_percent": 52.684766214177984
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "model": "decision_tree_model",
+  "params": {
+    "lookback": 71,
+    "max_depth": 17,
+    "min_samples_split": 3,
+    "min_samples_leaf": 3,
+    "artifact_dir": "trainer\\btc\\4h\\decision_tree"
+  },
+  "metrics": {
+    "mse": 19233801.4031407,
+    "rmse": 4385.635803750774,
+    "mae": 1772.5166127039142,
+    "r2": 0.9797414521264033,
+    "mape_percent": 2.1835205997425304,
+    "directional_accuracy_percent": 69.09845341380611
+  }
+}

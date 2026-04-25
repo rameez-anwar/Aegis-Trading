@@ -2,6 +2,8 @@ import warnings
 # Suppress sklearn parallel warnings that clutter output
 warnings.filterwarnings('ignore', message='.*sklearn.utils.parallel.delayed.*')
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn.utils.parallel')
+warnings.filterwarnings('ignore', category=UserWarning, message=r".*sklearn\.utils\.parallel\.delayed.*")
+warnings.filterwarnings('ignore', category=UserWarning, message=r".*should be used with.*sklearn\.utils\.parallel\.Parallel.*")
 
 import numpy as np
 import pandas as pd
@@ -76,11 +78,14 @@ class BaseLearner:
         # Create signals array with same length as data
         signals = np.zeros(len(data))
         
-        # Get the lookback parameter
+        # Get the lookback/sequence length parameter used by the model
         if params is None:
             params = self.models[model_name].get_default_params()
         
-        lookback = params.get('lookback', 60)
+        if 'sequence_length' in params:
+            lookback = params.get('sequence_length', 60)
+        else:
+            lookback = params.get('lookback', 60)
         
         # Determine start index for signal generation
         if start_date:
@@ -98,15 +103,19 @@ class BaseLearner:
             prediction_start_idx = lookback
         
         if len(predictions) > 0:
-            # Use vectorized operations for better performance
-            # Exclude the last row from signal generation
-            max_valid_idx = len(data) - 1
-            valid_indices = np.arange(prediction_start_idx, min(prediction_start_idx + len(predictions), max_valid_idx))
+            # predictions[i] corresponds to data index (i + lookback)
+            # Align predictions to the correct timestamps before generating signals.
+            max_valid_idx = len(data) - 1  # exclude the last row from signal generation
+            valid_indices = np.arange(prediction_start_idx, max_valid_idx)
+            pred_idx = valid_indices - lookback
+            aligned_mask = (pred_idx >= 0) & (pred_idx < len(predictions))
+            valid_indices = valid_indices[aligned_mask]
+            pred_idx = pred_idx[aligned_mask]
             
             if len(valid_indices) > 0:
                 # Get actual close prices for comparison
                 actual_closes = data.iloc[valid_indices]['close'].values
-                pred_values = predictions[:len(valid_indices)]
+                pred_values = predictions[pred_idx]
                 
                 # Calculate percentage change from current price to predicted future price
                 percent_change = (pred_values - actual_closes) / actual_closes

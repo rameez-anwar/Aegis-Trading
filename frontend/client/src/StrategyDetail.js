@@ -19,10 +19,10 @@ function StrategyDetail({ strategyName, onBack }) {
   const [error, setError] = useState(null);
   const [pnlSeries, setPnlSeries] = useState([]);
   const [winLossData, setWinLossData] = useState(null);
-  const [metricsData, setMetricsData] = useState(null);
   const [ledgerData, setLedgerData] = useState(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [liveTicker, setLiveTicker] = useState(null);
 
   // TanStack Table column helper
   const columnHelper = createColumnHelper();
@@ -159,19 +159,6 @@ function StrategyDetail({ strategyName, onBack }) {
     }
   }, [strategyName]);
 
-  const fetchMetricsData = useCallback(async () => {
-    try {
-      console.log('Fetching comprehensive metrics for strategy:', strategyName);
-      const response = await axios.get(`/api/strategies/${strategyName}/metrics`);
-      console.log('Metrics response:', response.data);
-      if (response.data.success) {
-        setMetricsData(response.data.data);
-      }
-    } catch (err) {
-      console.error('Error fetching metrics data:', err);
-    }
-  }, [strategyName]);
-
   const fetchLedgerData = useCallback(async () => {
     try {
       setLedgerLoading(true);
@@ -213,7 +200,6 @@ function StrategyDetail({ strategyName, onBack }) {
     fetchStrategyDetails();
     fetchPnlData();
     fetchWinLossData();
-    fetchMetricsData();
     fetchLedgerData(); // Call fetchLedgerData here
     
     // Remove focus outlines from all SVG elements
@@ -234,10 +220,54 @@ function StrategyDetail({ strategyName, onBack }) {
     return () => {
       document.head.removeChild(style);
     };
-  }, [fetchStrategyDetails, fetchPnlData, fetchWinLossData, fetchMetricsData, fetchLedgerData]);
+  }, [fetchStrategyDetails, fetchPnlData, fetchWinLossData, fetchLedgerData]);
+
+  // Live ticker polling for "Current Status"
+  useEffect(() => {
+    let timer = null;
+    let cancelled = false;
+
+    async function tick() {
+      try {
+        if (!strategy?.parameters?.general?.data_exchange || !strategy?.parameters?.general?.symbol) return;
+        const exchange = strategy.parameters.general.data_exchange;
+        const symbol = strategy.parameters.general.symbol;
+        const resp = await axios.get('/api/market/ticker', { params: { exchange, symbol } });
+        if (!cancelled && resp.data?.success) {
+          setLiveTicker(resp.data.data);
+        }
+      } catch (e) {
+        // Silent fail: keep last known ticker / fallback to DB-derived values
+      }
+    }
+
+    tick();
+    timer = setInterval(tick, 15000); // every 15s
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [strategy?.parameters?.general?.data_exchange, strategy?.parameters?.general?.symbol]);
 
   const getPerformanceColor = (value) => {
     return value >= 0 ? 'text-green-600' : 'text-red-600';
+  };
+
+  const computedCurrentPrice =
+    (liveTicker?.lastPrice != null ? parseFloat(liveTicker.lastPrice) : null) ??
+    parseFloat(strategy?.performance?.currentPrice || 0);
+
+  const pct24h = liveTicker?.priceChangePercent24h;
+  const volQuote24h = liveTicker?.volume24hQuote;
+  const volBase24h = liveTicker?.volume24hBase;
+  const high24h = liveTicker?.highPrice24h;
+  const low24h = liveTicker?.lowPrice24h;
+  const liveUpdatedAt = liveTicker?.timestamp;
+
+  const formatCompact = (n) => {
+    if (n === null || n === undefined || !Number.isFinite(Number(n))) return '-';
+    return Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 }).format(Number(n));
   };
 
   if (loading) {
@@ -299,7 +329,7 @@ function StrategyDetail({ strategyName, onBack }) {
               to="/"
               className="text-blue-600 hover:text-blue-800 transition-colors font-medium"
             >
-              Simulator
+              Strategies
             </Link>
             <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -378,46 +408,51 @@ function StrategyDetail({ strategyName, onBack }) {
 
           {/* Center: Current Status - 50% */}
           <div className="flex flex-col justify-start items-center w-1/2 px-4 border-r border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-900 mb-2 text-center">Current Status</h3>
-            <div className="grid grid-cols-3 gap-3 w-full max-w-md">
-              <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
-                <div className="text-xs text-gray-500 mb-1">Entry Price</div>
-                <div className="text-sm font-semibold text-gray-900">${parseFloat(strategy.performance.entryPrice).toFixed(2)}</div>
+            <h3 className="text-xs font-semibold text-gray-900 mb-2 text-center">Live Coin Details</h3>
+            <div className="grid grid-cols-3 gap-2 w-full max-w-sm">
+              <div className="bg-gray-50 rounded-md p-2 text-center border border-gray-200">
+                <div className="text-[10px] text-gray-500 mb-0.5">Current Price</div>
+                <div className="text-xs font-semibold text-gray-900">${computedCurrentPrice.toFixed(2)}</div>
+                {liveUpdatedAt && (
+                  <div className="text-[10px] text-gray-500 mt-1">
+                    Live updated: {new Date(liveUpdatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </div>
+                )}
               </div>
-              <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
-                <div className="text-xs text-gray-500 mb-1">Current Price</div>
-                <div className="text-sm font-semibold text-gray-900">${parseFloat(strategy.performance.currentPrice).toFixed(2)}</div>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
-                <div className="text-xs text-gray-500 mb-1">Current PNL</div>
-                <div className={`text-sm font-semibold ${getPerformanceColor(strategy.performance.currentPnl)}`}>{parseFloat(strategy.performance.currentPnl).toFixed(2)}%</div>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
-                <div className="text-xs text-gray-500 mb-1">Forecast</div>
-                <div className="text-sm font-semibold text-gray-900">{strategy.forecast.forecast || '-'}</div>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
-                <div className="text-xs text-gray-500 mb-1">Next Forecast</div>
-                <div className="text-sm font-semibold text-gray-900">
-                  {strategy.forecast.nextForecast ? 
-                    new Date(strategy.forecast.nextForecast).toLocaleDateString('en-US', { 
-                      day: '2-digit', 
-                      month: 'short', 
-                      year: 'numeric' 
-                    }) : '-'
-                  }
+              <div className="bg-gray-50 rounded-md p-2 text-center border border-gray-200">
+                <div className="text-[10px] text-gray-500 mb-0.5">24h Change</div>
+                <div className={`text-xs font-semibold ${getPerformanceColor(parseFloat(pct24h || 0))}`}>
+                  {pct24h != null ? `${parseFloat(pct24h).toFixed(2)}%` : '-'}
                 </div>
               </div>
-              <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
-                <div className="text-xs text-gray-500 mb-1">Forecast Time</div>
-                <div className="text-sm font-semibold text-gray-900">
-                  {strategy.forecast.nextForecast ? 
-                    new Date(strategy.forecast.nextForecast).toLocaleTimeString('en-US', { 
-                      hour: '2-digit', 
-                      minute: '2-digit', 
-                      second: '2-digit' 
-                    }) : '-'
-                  }
+              <div className="bg-gray-50 rounded-md p-2 text-center border border-gray-200">
+                <div className="text-[10px] text-gray-500 mb-0.5">24h Volume</div>
+                <div className="text-xs font-semibold text-gray-900">
+                  {volQuote24h != null ? `$${formatCompact(volQuote24h)}` : '-'}
+                </div>
+                <div className="text-[10px] text-gray-500 mt-1">
+                  Base: {volBase24h != null ? formatCompact(volBase24h) : '-'}
+                </div>
+              </div>
+              <div className="bg-gray-50 rounded-md p-2 text-center border border-gray-200">
+                <div className="text-[10px] text-gray-500 mb-0.5">24h High</div>
+                <div className="text-xs font-semibold text-gray-900">
+                  {high24h != null ? `$${parseFloat(high24h).toFixed(2)}` : '-'}
+                </div>
+              </div>
+              <div className="bg-gray-50 rounded-md p-2 text-center border border-gray-200">
+                <div className="text-[10px] text-gray-500 mb-0.5">24h Low</div>
+                <div className="text-xs font-semibold text-gray-900">
+                  {low24h != null ? `$${parseFloat(low24h).toFixed(2)}` : '-'}
+                </div>
+              </div>
+              <div className="bg-gray-50 rounded-md p-2 text-center border border-gray-200">
+                <div className="text-[10px] text-gray-500 mb-0.5">Symbol / Exchange</div>
+                <div className="text-xs font-semibold text-gray-900">
+                  {strategy?.parameters?.general?.symbol?.toUpperCase?.() || '-'}
+                </div>
+                <div className="text-[10px] text-gray-500 mt-1">
+                  {strategy?.parameters?.general?.data_exchange || '-'}
                 </div>
               </div>
             </div>
@@ -874,324 +909,6 @@ function StrategyDetail({ strategyName, onBack }) {
               </div>
             </div>
           )}
-        </div>
-
-        {/* Comprehensive Evaluatory Metrics Section */}
-        <div className="bg-gradient-to-br from-white via-gray-50 to-blue-50 rounded-2xl shadow-2xl p-8 mt-8 border border-gray-100">
-          <div className="flex items-center space-x-4 mb-6">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-1">Comprehensive Evaluatory Metrics</h2>
-              <p className="text-gray-600">Advanced performance and risk analysis</p>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {/* Performance Metrics */}
-            <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-200 hover:shadow-xl transition-all duration-300">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Performance Metrics</h4>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Total Return</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.totalReturn || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Daily Return</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.dailyReturn || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Weekly Return</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.weeklyReturn || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Monthly Return</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.monthlyReturn || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">CAGR</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.cagr || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Sharpe Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.sharpeRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Sortino Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.sortinoRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Calmar Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.calmarRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Alpha</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.alpha || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Beta</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.beta || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">R²</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.r2 || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Information Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.informationRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Treynor Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.treynorRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Profit Factor</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.profitFactor || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Omega Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.omegaRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Gain to Pain Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.gainToPainRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Payoff Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.payoffRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">CPC Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.cpcRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Risk Return Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.riskReturnRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Common Sense Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.performance?.commonSenseRatio || 0).toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Risk Metrics */}
-            <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-200 hover:shadow-xl transition-all duration-300">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Risk Metrics</h4>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Max Drawdown</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.maxDrawdown || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Max Drawdown Days</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.maxDrawdownDays || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Avg Drawdown</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.avgDrawdown || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Avg Drawdown Days</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.avgDrawdownDays || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Current Drawdown</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.currentDrawdown || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Current Drawdown Days</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.currentDrawdownDays || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Drawdown Duration</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.drawdownDuration || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Conditional Drawdown at Risk</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.conditionalDrawdownAtRisk || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Ulcer Index</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.ulcerIndex || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Risk of Ruin</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.riskOfRuin || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">VaR (95%)</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.var_95 || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">CVaR (95%)</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.cvar_95 || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Downside Deviation</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.downsideDeviation || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Volatility</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.volatility || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Annualized Volatility</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.risk?.annualizedVolatility || 0).toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Trade Metrics */}
-            <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-200 hover:shadow-xl transition-all duration-300">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Trade Metrics</h4>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Number of Trades</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.numberOfTrades || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Win Rate</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.winRate || 0).toFixed(2)}%</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Loss Rate</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.lossRate || 0).toFixed(2)}%</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Average Win</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.averageWin || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Average Loss</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.averageLoss || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Average Trade Duration</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.averageTradeDuration || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Largest Win</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.largestWin || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Largest Loss</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.largestLoss || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Consecutive Wins</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.consecutiveWins || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Consecutive Losses</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.consecutiveLosses || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Avg Trade Return</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.avgTradeReturn || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Profitability per Trade</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.profitabilityPerTrade || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Common Sense Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.commonSenseRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Recovery Factor</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.trade?.recoveryFactor || 0).toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Profitability Metrics */}
-            <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-200 hover:shadow-xl transition-all duration-300">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Profitability Metrics</h4>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Total Profit</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.totalProfit || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Total Loss</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.totalLoss || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Net Profit</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.netProfit || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Risk Return Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.riskReturnRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Common Sense Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.commonSenseRatio || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Conditional Drawdown at Risk</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.conditionalDrawdownAtRisk || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Avg Profit per Trade</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.avgProfitPerTrade || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Avg Loss per Trade</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.avgLossPerTrade || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Profit Loss Ratio</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.profitability?.profitLossRatio || 0).toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Statistical Metrics */}
-            <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-200 hover:shadow-xl transition-all duration-300">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Statistical Metrics</h4>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Skewness</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.statistical?.skewness || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Kurtosis</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.statistical?.kurtosis || 0).toFixed(2)}</span>
-                  </div>
-              </div>
-            </div>
-
-            {/* Monthly and Weekly Metrics */}
-            <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-200 hover:shadow-xl transition-all duration-300">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Monthly & Weekly Metrics</h4>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Winning Weeks</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.monthlyWeekly?.winningWeeks || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Losing Weeks</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.monthlyWeekly?.losingWeeks || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Winning Months</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.monthlyWeekly?.winningMonths || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Losing Months</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.monthlyWeekly?.losingMonths || 0).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Positive Months (%)</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.monthlyWeekly?.positiveMonthsPercent || 0).toFixed(2)}%</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Negative Months (%)</span>
-                  <span className="font-medium text-gray-900">{parseFloat(metricsData?.monthlyWeekly?.negativeMonthsPercent || 0).toFixed(2)}%</span>
-                  </div>
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* Strategy Ledger Section */}

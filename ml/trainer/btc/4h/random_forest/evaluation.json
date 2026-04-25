@@ -1,0 +1,20 @@
+{
+  "model": "random_forest_model",
+  "params": {
+    "lookback": 52,
+    "n_estimators": 97,
+    "max_depth": 13,
+    "min_samples_split": 11,
+    "min_samples_leaf": 3,
+    "max_features": "sqrt",
+    "artifact_dir": "trainer\\btc\\4h\\random_forest"
+  },
+  "metrics": {
+    "mse": 13642304.745272165,
+    "rmse": 3693.549071729272,
+    "mae": 1473.393638132935,
+    "r2": 0.9856514580726042,
+    "mape_percent": 1.827856953681562,
+    "directional_accuracy_percent": 65.94590522112559
+  }
+}

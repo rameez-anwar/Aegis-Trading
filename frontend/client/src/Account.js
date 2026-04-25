@@ -23,7 +23,7 @@ const Account = () => {
   const [closingPosition, setClosingPosition] = useState(null);
   
   // Leverage State
-  const [leverage, setLeverage] = useState({});
+  const [leverageItems, setLeverageItems] = useState([]);
   const [leverageLoading, setLeverageLoading] = useState(false);
   const [leverageInput, setLeverageInput] = useState({});
   const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'live-trading', 'leverage', 'ledger'
@@ -73,7 +73,7 @@ const Account = () => {
     try {
       setLeverageLoading(true);
       const res = await axios.get('/api/me/leverage', { headers: authHeaders });
-      setLeverage(res.data.data || {});
+      setLeverageItems(res.data?.data?.items || []);
     } catch (e) {
       console.error('Failed to load leverage:', e);
     } finally {
@@ -101,11 +101,11 @@ const Account = () => {
     }
   };
 
-  const updateLeverage = async (symbol, newLeverage) => {
+  const updateLeverage = async (strategyName, newLeverage) => {
     try {
       setLeverageLoading(true);
       await axios.post('/api/me/leverage', 
-        { symbol, leverage: newLeverage },
+        { strategyName, leverage: newLeverage },
         { headers: authHeaders }
       );
       await loadLeverage(); // Refresh leverage
@@ -194,7 +194,7 @@ const Account = () => {
             avatar: null
           });
         setPositions([]);
-        setLeverage({});
+        setLeverageItems([]);
       } catch (e) {
         setError(e?.response?.data?.error || 'Failed to delete credentials');
       }
@@ -629,14 +629,17 @@ const Account = () => {
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Set Leverage</h3>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Symbol</label>
-                      <input
-                        type="text"
-                        placeholder="e.g., BTCUSDT"
-                        value={leverageInput.symbol || ''}
-                        onChange={(e) => setLeverageInput({ ...leverageInput, symbol: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      />
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Strategy</label>
+                      <select
+                        value={leverageInput.strategyName || ''}
+                        onChange={(e) => setLeverageInput({ ...leverageInput, strategyName: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                      >
+                        <option value="">Select a strategy</option>
+                        {(leverageItems.length ? leverageItems.map(i => i.strategyName) : (profile.strategies || [])).map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Leverage (1-125x)</label>
@@ -653,12 +656,12 @@ const Account = () => {
                     <div className="flex items-end">
                       <button
                         onClick={() => {
-                          if (leverageInput.symbol && leverageInput.leverage) {
-                            updateLeverage(leverageInput.symbol, leverageInput.leverage);
+                          if (leverageInput.strategyName && leverageInput.leverage) {
+                            updateLeverage(leverageInput.strategyName, leverageInput.leverage);
                             setLeverageInput({});
                           }
                         }}
-                        disabled={leverageLoading || !leverageInput.symbol || !leverageInput.leverage}
+                        disabled={leverageLoading || !leverageInput.strategyName || !leverageInput.leverage}
                         className="w-full px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
                       >
                         {leverageLoading ? 'Updating...' : 'Set Leverage'}
@@ -670,18 +673,21 @@ const Account = () => {
                 {/* Current Leverage Settings */}
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Current Leverage Settings</h3>
-                  {Object.keys(leverage).length === 0 ? (
+                  {leverageItems.length === 0 ? (
                     <div className="text-center py-8 bg-gray-50 rounded-lg">
-                      <p className="text-gray-500">No leverage settings configured</p>
+                      <p className="text-gray-500">No leverage settings configured (select strategies in Settings first)</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {Object.entries(leverage).map(([symbol, lev]) => (
-                        <div key={symbol} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                      {leverageItems.map((item) => (
+                        <div key={item.strategyName} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                           <div className="flex items-center justify-between">
-                            <span className="font-semibold text-gray-900">{symbol}</span>
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-gray-900">{item.symbol || '-'}</span>
+                              <span className="text-xs text-gray-500">{item.strategyName}</span>
+                            </div>
                             <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-bold">
-                              {lev}x
+                              {item.leverage}x
                             </span>
                           </div>
                         </div>

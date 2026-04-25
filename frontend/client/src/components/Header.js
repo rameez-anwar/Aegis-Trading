@@ -32,7 +32,6 @@ const Header = ({ activePage = 'simulator' }) => {
                 <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl shadow-lg flex items-center justify-center">
                   <BarChart3 className="w-7 h-7 text-white" />
                 </div>
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-white animate-pulse"></div>
               </div>
               <div className="flex flex-col">
                 <h1 className="text-3xl font-bold text-white tracking-tight">Aegis Trading</h1>
@@ -61,7 +60,7 @@ const Header = ({ activePage = 'simulator' }) => {
                   : 'text-blue-200 hover:text-white hover:bg-white/10 backdrop-blur-sm border border-blue-500/20'
               }`}
             >
-              <span>Simulator</span>
+              <span>Strategies</span>
             </Link>
             <Link
               to="/models"
@@ -72,16 +71,6 @@ const Header = ({ activePage = 'simulator' }) => {
               }`}
             >
               <span>Models</span>
-            </Link>
-            <Link
-              to="/user-management"
-              className={`px-6 py-3 text-sm font-semibold rounded-xl transition-all duration-300 ${
-                activePage === 'user-management'
-                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 transform border border-blue-500/20'
-                  : 'text-blue-200 hover:text-white hover:bg-white/10 backdrop-blur-sm border border-blue-500/20'
-              }`}
-            >
-              <span>User Management</span>
             </Link>
             <div className="relative" ref={dropdownRef}>
               {!isAuthenticated ? (

@@ -1,0 +1,19 @@
+{
+  "model": "lstm_model",
+  "params": {
+    "lookback": 79,
+    "units": 51,
+    "dropout": 0.13906884560255356,
+    "epochs": 78,
+    "batch_size": 37,
+    "artifact_dir": "trainer\\btc\\4h\\lstm"
+  },
+  "metrics": {
+    "mse": 580025.0918836036,
+    "rmse": 761.5937840368733,
+    "mae": 521.80171768576,
+    "r2": 0.9993887193409642,
+    "mape_percent": 1.2703257718166012,
+    "directional_accuracy_percent": 50.109458745376315
+  }
+}

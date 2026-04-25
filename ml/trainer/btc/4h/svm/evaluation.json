@@ -1,0 +1,18 @@
+{
+  "model": "svm_model",
+  "params": {
+    "lookback": 31,
+    "C": 9.702107536403744,
+    "epsilon": 0.41789689399220664,
+    "kernel": "linear",
+    "artifact_dir": "trainer\\btc\\4h\\svm"
+  },
+  "metrics": {
+    "mse": 954952190.9300536,
+    "rmse": 30902.30073845722,
+    "mae": 26634.873649762983,
+    "r2": -0.0028026484311591826,
+    "mape_percent": 106.19134380640422,
+    "directional_accuracy_percent": 50.94396389620158
+  }
+}

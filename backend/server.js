@@ -12,6 +12,23 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+function normalizeTradingSymbol(symbol) {
+  if (!symbol) return null;
+  const s = String(symbol).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (s.endsWith('USDT')) return s;
+  return `${s}USDT`;
+}
+
+async function fetchJson(url) {
+  // Node 18+ provides global fetch; if not available, this will throw.
+  const res = await fetch(url, { method: 'GET' });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status} ${res.statusText} - ${text}`.trim());
+  }
+  return await res.json();
+}
+
 // Database connection
 const pool = new Pool({
   user: process.env.PG_USER || 'postgres',
@@ -20,6 +37,19 @@ const pool = new Pool({
   password: process.env.PG_PASSWORD || 'your_password_here',
   port: process.env.PG_PORT || 5432,
 });
+
+async function ensureUserLeverageSettingsColumn() {
+  try {
+    // JSONB map: { "<strategy_name>": <leverage_int> }
+    await pool.query(`
+      ALTER TABLE users.users
+      ADD COLUMN IF NOT EXISTS leverage_settings JSONB NOT NULL DEFAULT '{}'::jsonb
+    `);
+  } catch (e) {
+    // Don't crash server startup if schema permissions are restricted; endpoints will error clearly.
+    console.warn('Could not ensure leverage_settings column exists:', e.message);
+  }
+}
 
 // Middleware
 app.use(helmet());
@@ -71,6 +101,132 @@ app.get('/', (req, res) => {
       testEmail: '/api/test-email'
     }
   });
+});
+
+// Live market price (public endpoints; no auth required)
+app.get('/api/market/price', async (req, res) => {
+  try {
+    const exchange = String(req.query.exchange || 'bybit').toLowerCase();
+    const symbol = normalizeTradingSymbol(req.query.symbol);
+    if (!symbol) {
+      return res.status(400).json({ success: false, error: 'symbol is required' });
+    }
+
+    let price = null;
+    let source = null;
+
+    if (exchange === 'binance') {
+      const data = await fetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${encodeURIComponent(symbol)}`);
+      price = data && data.price ? parseFloat(data.price) : null;
+      source = 'binance';
+    } else {
+      // default to bybit
+      const data = await fetchJson(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`);
+      const list = data && data.result && Array.isArray(data.result.list) ? data.result.list : [];
+      const item = list[0];
+      const p = item && (item.lastPrice ?? item.markPrice);
+      price = p != null ? parseFloat(p) : null;
+      source = 'bybit';
+    }
+
+    if (!Number.isFinite(price)) {
+      return res.status(502).json({ success: false, error: 'Failed to fetch price', details: { exchange, symbol } });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        exchange: source,
+        symbol,
+        price,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error('Live price error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch live price', message: err.message });
+  }
+});
+
+// Live market ticker (price + volume + 24h stats)
+app.get('/api/market/ticker', async (req, res) => {
+  try {
+    const exchange = String(req.query.exchange || 'bybit').toLowerCase();
+    const symbol = normalizeTradingSymbol(req.query.symbol);
+    if (!symbol) {
+      return res.status(400).json({ success: false, error: 'symbol is required' });
+    }
+
+    if (exchange === 'binance') {
+      const data = await fetchJson(`https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(symbol)}`);
+      const lastPrice = data && data.lastPrice ? parseFloat(data.lastPrice) : null;
+      const volume = data && data.volume ? parseFloat(data.volume) : null;
+      const quoteVolume = data && data.quoteVolume ? parseFloat(data.quoteVolume) : null;
+      const highPrice = data && data.highPrice ? parseFloat(data.highPrice) : null;
+      const lowPrice = data && data.lowPrice ? parseFloat(data.lowPrice) : null;
+      const priceChangePercent = data && data.priceChangePercent ? parseFloat(data.priceChangePercent) : null;
+
+      if (!Number.isFinite(lastPrice)) {
+        return res.status(502).json({ success: false, error: 'Failed to fetch ticker', details: { exchange, symbol } });
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          exchange: 'binance',
+          symbol,
+          lastPrice,
+          priceChangePercent24h: Number.isFinite(priceChangePercent) ? priceChangePercent : null,
+          highPrice24h: Number.isFinite(highPrice) ? highPrice : null,
+          lowPrice24h: Number.isFinite(lowPrice) ? lowPrice : null,
+          volume24hBase: Number.isFinite(volume) ? volume : null,
+          volume24hQuote: Number.isFinite(quoteVolume) ? quoteVolume : null,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    // default to bybit
+    const data = await fetchJson(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(symbol)}`);
+    const list = data && data.result && Array.isArray(data.result.list) ? data.result.list : [];
+    const item = list[0] || {};
+
+    const lastPrice = item.lastPrice != null ? parseFloat(item.lastPrice) : null;
+    const highPrice24h = item.highPrice24h != null ? parseFloat(item.highPrice24h) : null;
+    const lowPrice24h = item.lowPrice24h != null ? parseFloat(item.lowPrice24h) : null;
+    const volume24hBase = item.volume24h != null ? parseFloat(item.volume24h) : null;
+    const volume24hQuote = item.turnover24h != null ? parseFloat(item.turnover24h) : null;
+
+    let priceChangePercent24h = null;
+    if (Number.isFinite(lastPrice) && item.prevPrice24h != null) {
+      const prev = parseFloat(item.prevPrice24h);
+      if (Number.isFinite(prev) && prev !== 0) {
+        priceChangePercent24h = ((lastPrice - prev) / prev) * 100.0;
+      }
+    }
+
+    if (!Number.isFinite(lastPrice)) {
+      return res.status(502).json({ success: false, error: 'Failed to fetch ticker', details: { exchange, symbol } });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        exchange: 'bybit',
+        symbol,
+        lastPrice,
+        priceChangePercent24h: Number.isFinite(priceChangePercent24h) ? parseFloat(priceChangePercent24h.toFixed(4)) : null,
+        highPrice24h: Number.isFinite(highPrice24h) ? highPrice24h : null,
+        lowPrice24h: Number.isFinite(lowPrice24h) ? lowPrice24h : null,
+        volume24hBase: Number.isFinite(volume24hBase) ? volume24hBase : null,
+        volume24hQuote: Number.isFinite(volume24hQuote) ? volume24hQuote : null,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error('Live ticker error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch live ticker', message: err.message });
+  }
 });
 
 // Test email endpoint (for debugging)
@@ -535,7 +691,7 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
     const { id } = req.user;
     const query = `
-      SELECT id, name, email, api_key, strategies, use_ml, avatar, auth_provider, created_at, updated_at
+      SELECT id, name, email, api_key, strategies, use_ml, leverage_settings, avatar, auth_provider, created_at, updated_at
       FROM users.users WHERE id = $1
     `;
     const { rows } = await pool.query(query, [id]);
@@ -860,6 +1016,9 @@ app.get('/api/strategies/:id', async (req, res) => {
 app.get('/api/strategies/:id/details', async (req, res) => {
   try {
     const strategyName = req.params.id;
+    if (!isSafeIdentifier(strategyName)) {
+      return res.status(400).json({ success: false, error: 'Invalid strategy identifier' });
+    }
     // 1. Fetch all config parameters
     const basicQuery = `SELECT * FROM public.config_strategies WHERE name = $1`;
     const basicResult = await pool.query(basicQuery, [strategyName]);
@@ -906,12 +1065,29 @@ app.get('/api/strategies/:id/details', async (req, res) => {
     }
 
     // 6. Historical Returns (sum of pnl_percent for each period)
+    // IMPORTANT: use the backtest's latest timestamp as "now" so results are meaningful
+    // even if the backtest data ends in the past.
     const periods = [1, 7, 15, 30, 45, 60];
     let historicalReturns = {};
+    let lastBacktestDatetime = null;
+    try {
+      const lastDtQ = `SELECT MAX(datetime) as last_dt FROM strategies_backtest.${strategyName}_backtest`;
+      const lastDtR = await pool.query(lastDtQ);
+      lastBacktestDatetime = lastDtR.rows?.[0]?.last_dt || null;
+    } catch (e) {
+      lastBacktestDatetime = null;
+    }
+
     for (const d of periods) {
       try {
-        const q = `SELECT SUM(pnl_percent) as ret FROM strategies_backtest.${strategyName}_backtest WHERE datetime >= NOW() - INTERVAL '${d} days'`;
-        const r = await pool.query(q);
+        const q = lastBacktestDatetime
+          ? `SELECT SUM(pnl_percent) as ret
+             FROM strategies_backtest.${strategyName}_backtest
+             WHERE datetime >= $1::timestamp - INTERVAL '${d} days'`
+          : `SELECT SUM(pnl_percent) as ret
+             FROM strategies_backtest.${strategyName}_backtest
+             WHERE datetime >= NOW() - INTERVAL '${d} days'`;
+        const r = lastBacktestDatetime ? await pool.query(q, [lastBacktestDatetime]) : await pool.query(q);
         historicalReturns[`${d}d`] = parseFloat(r.rows[0].ret || 0);
       } catch (e) { historicalReturns[`${d}d`] = 0; }
     }
@@ -1076,7 +1252,8 @@ app.get('/api/strategies/:id/details', async (req, res) => {
         entryPrice,
         currentPrice,
         currentPnl,
-        historicalReturns
+        historicalReturns,
+        lastBacktestDatetime
       },
       forecast: forecastData,
       parameters: {
@@ -1893,6 +2070,9 @@ app.get('/api/models/:tableName/pnl_timeseries', async (req, res) => {
 app.get('/api/models/:tableName/winloss', async (req, res) => {
   try {
     const tableName = req.params.tableName;
+    const TP_ACTIONS = new Set(['tp', 'take_profit']);
+    const SL_ACTIONS = new Set(['sl', 'stop_loss']);
+    const OUTCOME_ACTIONS = new Set(['tp', 'take_profit', 'sl', 'stop_loss', 'direction_change']);
     const query = `
       SELECT 
         action,
@@ -1909,11 +2089,16 @@ app.get('/api/models/:tableName/winloss', async (req, res) => {
     const individualPnl = [];
     
     result.rows.forEach(row => {
-      const action = row.action;
+      const action = String(row.action || '').toLowerCase();
       const pnl = parseFloat(row.pnl_percent);
       
       // Skip transaction fee (-0.05)
       if (pnl === -0.05) {
+        return;
+      }
+
+      // Only consider outcome events for win/loss + distribution
+      if (!OUTCOME_ACTIONS.has(action)) {
         return;
       }
       
@@ -1921,10 +2106,10 @@ app.get('/api/models/:tableName/winloss', async (req, res) => {
       individualPnl.push(pnl);
       
       // Determine win/loss based on action and PnL
-      if (action === 'tp') {
+      if (TP_ACTIONS.has(action)) {
         // Take profit = win
         winCount++;
-      } else if (action === 'sl') {
+      } else if (SL_ACTIONS.has(action)) {
         // Stop loss = loss
         lossCount++;
       } else if (action === 'direction_change') {
@@ -2222,20 +2407,53 @@ app.post('/api/me/positions/:symbol/close', authMiddleware, async (req, res) => 
 app.get('/api/me/leverage', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { symbol } = req.query;
-    
+
     const { rows: userRows } = await pool.query(
-      'SELECT api_key, api_secret FROM users.users WHERE id = $1',
+      'SELECT strategies, leverage_settings FROM users.users WHERE id = $1',
       [userId]
     );
-    
-    if (userRows.length === 0 || !userRows[0].api_key || !userRows[0].api_secret) {
-      return res.json({ success: true, data: { leverage: 1 } });
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
     }
-    
-    // TODO: Integrate actual Bybit API to get leverage
-    // For now return default
-    return res.json({ success: true, data: { leverage: 1, symbol: symbol || 'all' } });
+
+    let strategies = userRows[0].strategies;
+    if (typeof strategies === 'string') {
+      try { strategies = JSON.parse(strategies); } catch { strategies = []; }
+    }
+    if (!Array.isArray(strategies)) strategies = [];
+
+    const leverageSettings = userRows[0].leverage_settings || {};
+
+    if (strategies.length === 0) {
+      return res.json({ success: true, data: { items: [] } });
+    }
+
+    const { rows: strategyRows } = await pool.query(
+      `
+        SELECT name, exchange, symbol
+        FROM public.config_strategies
+        WHERE name = ANY($1)
+        ORDER BY name ASC
+      `,
+      [strategies]
+    );
+
+    const items = strategyRows.map((r) => {
+      const symbol = (r.symbol || '').toUpperCase();
+      const symbolUsdt = symbol ? (symbol.endsWith('USDT') ? symbol : `${symbol}USDT`) : null;
+      const lev = Number.isFinite(Number(leverageSettings?.[r.name]))
+        ? parseInt(leverageSettings[r.name], 10)
+        : 1;
+      return {
+        strategyName: r.name,
+        exchange: r.exchange || null,
+        symbol: symbolUsdt,
+        leverage: Math.min(Math.max(lev || 1, 1), 125),
+      };
+    });
+
+    return res.json({ success: true, data: { items } });
   } catch (err) {
     console.error('Get leverage error:', err);
     return res.status(500).json({ success: false, error: 'Failed to fetch leverage', message: err.message });
@@ -2246,27 +2464,57 @@ app.get('/api/me/leverage', authMiddleware, async (req, res) => {
 app.post('/api/me/leverage', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { symbol, leverage } = req.body;
-    
-    if (!symbol || !leverage) {
-      return res.status(400).json({ success: false, error: 'Symbol and leverage are required' });
+    const { strategyName, leverage, symbol } = req.body;
+
+    const lev = parseInt(leverage, 10);
+    if (!Number.isFinite(lev) || lev < 1 || lev > 125) {
+      return res.status(400).json({ success: false, error: 'Leverage must be an integer between 1 and 125' });
     }
-    
-    const { rows: userRows } = await pool.query(
-      'SELECT api_key, api_secret FROM users.users WHERE id = $1',
-      [userId]
+
+    let targetStrategy = strategyName;
+
+    if (!targetStrategy) {
+      // Backward-compatible fallback: accept symbol, then try to map it to one of the user's selected strategies.
+      const sym = normalizeTradingSymbol(symbol);
+      if (!sym) {
+        return res.status(400).json({ success: false, error: 'strategyName is required (or provide a valid symbol)' });
+      }
+
+      const { rows: u } = await pool.query('SELECT strategies FROM users.users WHERE id = $1', [userId]);
+      let userStrategies = u?.[0]?.strategies;
+      if (typeof userStrategies === 'string') {
+        try { userStrategies = JSON.parse(userStrategies); } catch { userStrategies = []; }
+      }
+      if (!Array.isArray(userStrategies) || userStrategies.length === 0) {
+        return res.status(400).json({ success: false, error: 'No strategies selected for this user' });
+      }
+
+      const { rows: sRows } = await pool.query(
+        `
+          SELECT name, symbol
+          FROM public.config_strategies
+          WHERE name = ANY($1)
+        `,
+        [userStrategies]
+      );
+      const match = sRows.find((r) => normalizeTradingSymbol(r.symbol) === sym);
+      if (!match) {
+        return res.status(400).json({ success: false, error: 'Symbol does not match any selected strategy. Please pick a strategy.' });
+      }
+      targetStrategy = match.name;
+    }
+
+    await pool.query(
+      `
+        UPDATE users.users
+        SET leverage_settings = COALESCE(leverage_settings, '{}'::jsonb) || jsonb_build_object($1::text, $2::int),
+            updated_at = NOW()
+        WHERE id = $3
+      `,
+      [targetStrategy, lev, userId]
     );
-    
-    if (userRows.length === 0 || !userRows[0].api_key || !userRows[0].api_secret) {
-      return res.status(400).json({ success: false, error: 'API credentials not configured' });
-    }
-    
-    // TODO: Integrate actual Bybit API to set leverage
-    // const { HTTP } = require('pybit');
-    // const client = new HTTP({ api_key: userRows[0].api_key, api_secret: userRows[0].api_secret });
-    // await client.setLeverage({ category: 'linear', symbol: symbol, buyLeverage: leverage, sellLeverage: leverage });
-    
-    return res.json({ success: true, message: 'Leverage updated successfully' });
+
+    return res.json({ success: true, message: 'Leverage updated successfully', data: { strategyName: targetStrategy, leverage: lev } });
   } catch (err) {
     console.error('Set leverage error:', err);
     return res.status(500).json({ success: false, error: 'Failed to set leverage', message: err.message });
@@ -2317,3 +2565,6 @@ app.listen(PORT, () => {
   console.log(`API available at http://localhost:${PORT}/api/strategies`);
   console.log(`Health check at http://localhost:${PORT}/api/health`);
 }); 
+
+// Best-effort schema upgrade
+ensureUserLeverageSettingsColumn();

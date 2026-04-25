@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Unified Signal Generator and Trading System
-Combines Strategy and ML signals for automated trading on Bybit
-"""
-
 import warnings
 # Suppress sklearn parallel warnings that clutter output
 warnings.filterwarnings('ignore', message='.*sklearn.utils.parallel.delayed.*')
@@ -166,7 +160,7 @@ class UnifiedSignalGenerator:
         """Get user configuration from database"""
         try:
             query = text("""
-                SELECT id, name, email, api_key, api_secret, strategies, use_ml, created_at, updated_at
+                SELECT id, name, email, api_key, api_secret, strategies, use_ml, leverage_settings, created_at, updated_at
                 FROM users.users 
                 WHERE id = :user_id
             """)
@@ -184,6 +178,18 @@ class UnifiedSignalGenerator:
                     strategies = strategies_data
                 else:
                     strategies = []
+
+                # Handle leverage settings (JSONB) - map: { "<strategy_name>": <int> }
+                leverage_data = row[7]
+                if isinstance(leverage_data, str):
+                    try:
+                        leverage_settings = json.loads(leverage_data) if leverage_data else {}
+                    except Exception:
+                        leverage_settings = {}
+                elif isinstance(leverage_data, dict):
+                    leverage_settings = leverage_data
+                else:
+                    leverage_settings = {}
                 
                 user_config = {
                     'id': row[0],
@@ -193,8 +199,9 @@ class UnifiedSignalGenerator:
                     'api_secret': row[4],
                     'strategies': strategies,
                     'use_ml': row[6],
-                    'created_at': row[7],
-                    'updated_at': row[8]
+                    'leverage_settings': leverage_settings,
+                    'created_at': row[8],
+                    'updated_at': row[9]
                 }
                 
                 logger.info(f"Loaded user config for {user_config['name']}: {len(user_config['strategies'])} strategies, ML: {user_config['use_ml']}")
@@ -206,6 +213,32 @@ class UnifiedSignalGenerator:
         except Exception as e:
             logger.error(f"Error getting user config: {e}")
             return None
+
+    def set_leverage(self, client: HTTP, symbol: str, leverage: int) -> bool:
+        """Set Bybit leverage for the symbol (best-effort)."""
+        try:
+            lev = int(leverage)
+            if lev < 1:
+                lev = 1
+            if lev > 125:
+                lev = 125
+
+            resp = client.set_leverage(
+                category="linear",
+                symbol=symbol,
+                buyLeverage=str(lev),
+                sellLeverage=str(lev),
+            )
+
+            if resp.get('retCode') == 0:
+                logger.info(f"Leverage set to {lev}x for {symbol}")
+                return True
+
+            logger.warning(f"Failed to set leverage for {symbol}: {resp}")
+            return False
+        except Exception as e:
+            logger.warning(f"Error setting leverage for {symbol}: {e}")
+            return False
     
     def get_strategy_configs(self, strategy_names: List[str]) -> List[Dict[str, Any]]:
         """Get strategy configurations from database"""
@@ -2175,6 +2208,14 @@ class UnifiedSignalGenerator:
                                     logger.warning(f"Insufficient margin for {symbol} {side} {qty}. Skipping order.")
                                     continue
 
+                                # Ensure leverage for this user's selected strategy (best-effort)
+                                try:
+                                    lev_map = (user_config or {}).get('leverage_settings') or {}
+                                    desired_lev = lev_map.get(strategy_config.get('name'), 1)
+                                    self.set_leverage(client, symbol, desired_lev)
+                                except Exception:
+                                    pass
+
                                 # Place order
                                 order_id = self.place_order(client, symbol, side, qty, tp_price, sl_price)
                                 
@@ -2294,6 +2335,14 @@ class UnifiedSignalGenerator:
                     if not self.check_margin_availability(client, symbol, qty, side):
                         logger.warning(f"Insufficient margin for {symbol} {side} {qty}. Skipping order.")
                         continue
+
+                    # Ensure leverage for this user's selected strategy (best-effort)
+                    try:
+                        lev_map = (user_config or {}).get('leverage_settings') or {}
+                        desired_lev = lev_map.get(strategy_config.get('name'), 1)
+                        self.set_leverage(client, symbol, desired_lev)
+                    except Exception:
+                        pass
 
                     # Place order
                     order_id = self.place_order(client, symbol, side, qty, tp_price, sl_price)

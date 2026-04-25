@@ -11,18 +11,37 @@ import warnings
 # Suppress sklearn parallel warnings that clutter output
 warnings.filterwarnings('ignore', message='.*sklearn.utils.parallel.delayed.*')
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn.utils.parallel')
+warnings.filterwarnings(
+    'ignore',
+    category=UserWarning,
+    message=r".*sklearn\.utils\.parallel\.delayed.*",
+)
+warnings.filterwarnings(
+    'ignore',
+    category=UserWarning,
+    message=r".*should be used with.*sklearn\.utils\.parallel\.Parallel.*",
+)
 
 import configparser
 import pandas as pd
 import numpy as np
 import os
 import sys
-from typing import Dict, Any, List
+import random
+from typing import Dict, Any, List, TYPE_CHECKING
 import optuna
 import json
 from datetime import datetime
 from sqlalchemy import text
 import argparse
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+if TYPE_CHECKING:
+    from learner.base_learner import BaseLearner
 
 # Add paths for existing modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'data', 'downloaders'))
@@ -34,11 +53,18 @@ from DataDownloader import DataDownloader
 from backtest import Backtester
 from db_utils import get_pg_engine
 
-# Import our ML modules
-from learner.base_learner import BaseLearner
-
-# Import signal generator
-from signal_generator import SignalGenerator
+def set_global_seed(seed: int | None) -> None:
+    """Best-effort reproducibility across numpy / random / tensorflow."""
+    if seed is None:
+        return
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import tensorflow as tf  # imported late so env vars can be set first
+        tf.random.set_seed(seed)
+    except Exception:
+        # TensorFlow not installed or failed to import; ignore.
+        pass
 
 def load_config(config_path: str = "config.ini") -> Dict[str, Any]:
     """Load configuration from config.ini file"""
@@ -61,6 +87,9 @@ def load_config(config_path: str = "config.ini") -> Dict[str, Any]:
         },
         'optimization': {
             'n_trials': config.getint('Optimization', 'n_trials')
+        },
+        'reproducibility': {
+            'seed': config.getint('Reproducibility', 'seed', fallback=None)
         }
     }
 
@@ -99,6 +128,102 @@ def clean_model_name(model_name: str) -> str:
     if model_name.endswith('_model'):
         return model_name[:-6]  # Remove '_model' suffix
     return model_name
+
+
+def _artifact_dir_for(model_name: str, config: Dict[str, Any]) -> Path:
+    symbol = config["data"]["symbol"].lower()
+    time_horizon = config["data"]["time_horizon"]
+    clean_name = clean_model_name(model_name)
+    return Path("trainer") / symbol / time_horizon / clean_name
+
+
+def save_evaluation_and_plots(
+    base_learner: "BaseLearner",
+    model_name: str,
+    data: pd.DataFrame,
+    params: Dict[str, Any],
+    config: Dict[str, Any],
+) -> None:
+    """Save evaluation.json and common plots for any model."""
+    artifact_dir = _artifact_dir_for(model_name, config)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    if "sequence_length" in params:
+        lookback = int(params.get("sequence_length", 60))
+    else:
+        lookback = int(params.get("lookback", 60))
+
+    preds = base_learner.predict_with_model(model_name, data, params)
+    if preds is None or len(preds) == 0:
+        return
+
+    start_idx = lookback
+    end_idx = min(len(data), start_idx + len(preds))
+    target_indices = np.arange(start_idx, end_idx)
+    preds = np.asarray(preds[: len(target_indices)], dtype=float)
+    actual = data.iloc[target_indices]["close"].to_numpy(dtype=float)
+
+    mse = float(mean_squared_error(actual, preds))
+    rmse = float(np.sqrt(mse))
+    mae = float(mean_absolute_error(actual, preds))
+    r2 = float(r2_score(actual, preds))
+    mape = float(np.mean(np.abs((actual - preds) / np.clip(np.abs(actual), 1e-9, None))) * 100.0)
+
+    if len(actual) >= 2:
+        prev_actual = data.iloc[target_indices - 1]["close"].to_numpy(dtype=float)
+        actual_dir = np.sign(actual - prev_actual)
+        pred_dir = np.sign(preds - prev_actual)
+        directional_accuracy = float(np.mean(actual_dir == pred_dir) * 100.0)
+    else:
+        directional_accuracy = 0.0
+
+    evaluation = {
+        "model": model_name,
+        "params": {**params, "artifact_dir": str(artifact_dir)},
+        "metrics": {
+            "mse": mse,
+            "rmse": rmse,
+            "mae": mae,
+            "r2": r2,
+            "mape_percent": mape,
+            "directional_accuracy_percent": directional_accuracy,
+        },
+    }
+
+    with open(artifact_dir / "evaluation.json", "w", encoding="utf-8") as f:
+        json.dump(evaluation, f, indent=2)
+
+    try:
+        plt.figure(figsize=(12, 5))
+        plt.plot(actual, label="Actual", linewidth=1.5)
+        plt.plot(preds, label="Predicted", linewidth=1.2, alpha=0.8)
+        plt.title(f"{model_name} — Actual vs Predicted")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(artifact_dir / "actual_vs_predicted.png", dpi=160)
+        plt.close()
+
+        plt.figure(figsize=(6, 6))
+        plt.scatter(actual, preds, s=8, alpha=0.5)
+        lo = float(min(actual.min(), preds.min()))
+        hi = float(max(actual.max(), preds.max()))
+        plt.plot([lo, hi], [lo, hi], linewidth=1.0)
+        plt.title(f"{model_name} — Actual vs Predicted (scatter)")
+        plt.xlabel("Actual")
+        plt.ylabel("Predicted")
+        plt.tight_layout()
+        plt.savefig(artifact_dir / "actual_vs_predicted_scatter.png", dpi=160)
+        plt.close()
+
+        residuals = actual - preds
+        plt.figure(figsize=(10, 4))
+        plt.hist(residuals, bins=60, alpha=0.85)
+        plt.title(f"{model_name} — Residuals histogram")
+        plt.tight_layout()
+        plt.savefig(artifact_dir / "residuals_hist.png", dpi=160)
+        plt.close()
+    except Exception:
+        pass
 
 def display_database_contents(config: Dict[str, Any]):
     """Display database contents for verification"""
@@ -380,7 +505,7 @@ def save_ledger_to_db(data: pd.DataFrame, signals: np.ndarray, model_name: str, 
     
     return engine
 
-def save_model_to_pkl(base_learner: BaseLearner, model_name: str, config: Dict[str, Any], suffix: str = ""):
+def save_model_to_pkl(base_learner: "BaseLearner", model_name: str, config: Dict[str, Any], suffix: str = ""):
     """Save trained model as .pkl file in the same folder as the database"""
     symbol = config['data']['symbol'].lower()
     time_horizon = config['data']['time_horizon']
@@ -408,7 +533,7 @@ def save_model_to_pkl(base_learner: BaseLearner, model_name: str, config: Dict[s
         print(f"Error saving model {model_name}: {str(e)}")
         return None
 
-def optimize_model(base_learner: BaseLearner, data: pd.DataFrame, model_name: str, 
+def optimize_model(base_learner: "BaseLearner", data: pd.DataFrame, model_name: str, 
                   initial_capital: float, config: Dict[str, Any], n_trials: int = 100) -> Dict[str, Any]:
     """Optimize a single model using Optuna"""
     print(f"Starting optimization for {model_name}...")
@@ -496,20 +621,22 @@ def optimize_model(base_learner: BaseLearner, data: pd.DataFrame, model_name: st
                 conn.execute(insert_query, {
                     'trial_id': trial.number,
                     'parameters': json.dumps(params),
-                    'pnl': round(pnl, 2),
+                    'pnl': float(np.round(float(pnl), 2)),
                     'datetime': datetime.now()
                 })
             conn.commit()
             
             # Return PnL for maximization
-            return pnl
+            return float(pnl)
             
         except Exception as e:
             print(f"Error in trial {trial.number}: {str(e)}")
             return float('-inf')
     
-    # Create study for maximization
-    study = optuna.create_study(direction='maximize')
+    # Create study for maximization (seeded sampler improves repeatability)
+    seed = config.get('reproducibility', {}).get('seed')
+    sampler = optuna.samplers.TPESampler(seed=seed) if seed is not None else None
+    study = optuna.create_study(direction='maximize', sampler=sampler)
     
     # Optimize with fewer trials for speed
     study.optimize(objective, n_trials=n_trials)
@@ -535,6 +662,15 @@ def optimize_model(base_learner: BaseLearner, data: pd.DataFrame, model_name: st
         
         # Save the best model
         save_model_to_pkl(base_learner, model_name, config, "_best")
+
+        # Save evaluation metrics and plots for this model
+        save_evaluation_and_plots(
+            base_learner=base_learner,
+            model_name=model_name,
+            data=data,
+            params=best_params,
+            config=config,
+        )
         
     except Exception as e:
         print(f"Error saving best trial signals for {model_name}: {str(e)}")
@@ -577,6 +713,8 @@ def main():
         print(f"  Time Horizon: {signal_time_horizon}")
         print(f"  Continuous Mode: {signal_continuous}")
         
+        # Import here to avoid importing ML libs when not needed
+        from signal_generator import SignalGenerator
         generator = SignalGenerator()
         generator.run_signal_generation(
             exchange=signal_exchange,
@@ -592,6 +730,17 @@ def main():
     try:
         # Load configuration
         config = load_config()
+
+        # Best-effort determinism (must be set before model training)
+        # Note: TF determinism is not guaranteed on all hardware/ops.
+        seed = config.get('reproducibility', {}).get('seed')
+        if seed is not None:
+            os.environ.setdefault("PYTHONHASHSEED", str(seed))
+            os.environ.setdefault("TF_DETERMINISTIC_OPS", "1")
+        set_global_seed(seed)
+
+        # Import our ML modules after setting env/seed
+        from learner.base_learner import BaseLearner
         
         # Create database summary
         create_database_summary(config)
