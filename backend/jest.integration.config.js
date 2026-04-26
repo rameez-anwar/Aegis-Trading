@@ -1,6 +1,6 @@
 module.exports = {
   testEnvironment: 'node',
-  roots: ['<rootDir>/../testing/unit/backend'],
+  roots: ['<rootDir>/../testing/integration'],
   testMatch: ['**/*.test.js'],
   moduleDirectories: ['node_modules', '<rootDir>/node_modules'],
   verbose: true,
@@ -9,8 +9,8 @@ module.exports = {
     [
       'jest-junit',
       {
-        outputDirectory: '<rootDir>/../testing/unit/backend',
-        outputName: 'backend_unit_test_results.xml',
+        outputDirectory: '<rootDir>/../testing/integration',
+        outputName: 'integration_test_results.xml',
       },
     ],
   ],

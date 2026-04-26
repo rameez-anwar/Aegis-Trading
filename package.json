@@ -1,5 +1,5 @@
 {
-  "name": "crypto-signal-lab",
+  "name": "aegis-trading",
   "version": "1.0.0",
   "description": "Aegis Trading - AI-Powered Signal & Execution System",
   "main": "index.js",
@@ -12,7 +12,10 @@
     "frontend:dev": "cd frontend/client && npm start",
     "install:all": "cd backend && npm install && cd ../frontend/client && npm install",
     "build": "cd frontend/client && npm run build",
-    "test": "cd frontend/client && npm test"
+    "test:frontend": "cd frontend/client && npm test",
+    "test:backend": "cd backend && npm test",
+    "test:python": "pytest -q",
+    "test": "npm run test:python && npm run test:backend && npm run test:frontend"
   },
   "keywords": ["crypto", "trading", "signals", "strategies", "simulator"],
   "author": "Aegis Trading",

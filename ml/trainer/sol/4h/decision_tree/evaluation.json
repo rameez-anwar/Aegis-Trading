@@ -1,0 +1,18 @@
+{
+  "model": "decision_tree_model",
+  "params": {
+    "lookback": 71,
+    "max_depth": 17,
+    "min_samples_split": 3,
+    "min_samples_leaf": 3,
+    "artifact_dir": "trainer\\sol\\4h\\decision_tree"
+  },
+  "metrics": {
+    "mse": 10.173485584866363,
+    "rmse": 3.1895901907402404,
+    "mae": 1.9532859395067972,
+    "r2": 0.9978492492515749,
+    "mape_percent": 1.755440272606109,
+    "directional_accuracy_percent": 68.90219155844156
+  }
+}
