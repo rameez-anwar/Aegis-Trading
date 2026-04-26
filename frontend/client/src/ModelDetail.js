@@ -91,7 +91,7 @@ function ModelDetail({ tableName, onBack }) {
           const isPositive = value >= 0;
           return (
             <span className={`font-bold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
-              {isPositive ? '+' : ''}{value.toFixed(2)}%
+              {isPositive ? '+' : ''}${value.toFixed(2)}
             </span>
           );
         },
@@ -371,7 +371,7 @@ function ModelDetail({ tableName, onBack }) {
         {/* Top Section: Single Horizontal Card */}
         <div className="bg-white/80 backdrop-blur-sm rounded-xl shadow-lg p-6 mb-8 flex flex-col lg:flex-row gap-6 items-stretch">
           {/* Left: Model Info - 25% */}
-          <div className="flex flex-col w-1/4 flex-shrink-0 border-r border-gray-100 pr-6">
+          <div className="flex flex-col w-full lg:w-1/4 flex-shrink-0 lg:border-r border-gray-100 lg:pr-6">
             <div className="mb-4">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-3 h-3 bg-purple-500 rounded-full"></div>
@@ -410,9 +410,9 @@ function ModelDetail({ tableName, onBack }) {
           </div>
 
           {/* Center: Current Status - 50% */}
-          <div className="flex flex-col justify-start items-center w-1/2 px-4 border-r border-gray-100">
+          <div className="flex flex-col justify-start items-center w-full lg:w-1/2 px-0 lg:px-4 lg:border-r border-gray-100">
             <h3 className="text-sm font-semibold text-gray-900 mb-2 text-center">Model Performance</h3>
-            <div className="grid grid-cols-2 gap-3 w-full max-w-md">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-md">
               <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
                 <div className="text-xs text-gray-500 mb-1">Model Type</div>
                 <div className="text-sm font-semibold text-gray-900">{model.model_name}</div>
@@ -433,7 +433,7 @@ function ModelDetail({ tableName, onBack }) {
           </div>
 
           {/* Right: Historical Performance - 25% */}
-          <div className="flex flex-col justify-start w-1/4 pl-6">
+          <div className="flex flex-col justify-start w-full lg:w-1/4 pl-0 lg:pl-6">
             <h3 className="text-sm font-semibold text-gray-900 mb-2">Performance Summary</h3>
             <div className="grid grid-cols-1 gap-2 mb-2">
               <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
@@ -578,7 +578,7 @@ function ModelDetail({ tableName, onBack }) {
               </ResponsiveContainer>
               
               {/* Performance Stats */}
-              <div className="grid grid-cols-3 gap-4 mt-6">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
                 <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-100">
                   <div className="text-sm text-gray-500 mb-1">Peak P&L</div>
                   <div className="text-xl font-bold text-green-600">
@@ -736,7 +736,7 @@ function ModelDetail({ tableName, onBack }) {
                   </div>
                   
                   {/* Stats Cards Inside Win/Loss Analysis */}
-                  <div className="w-full grid grid-cols-3 gap-3 -mt-2">
+                  <div className="w-full grid grid-cols-1 sm:grid-cols-3 gap-3 -mt-2">
                     {/* Wins Card */}
                     <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-lg shadow-sm p-3 border border-green-100">
                       <div className="flex items-center space-x-2 mb-1">
@@ -911,7 +911,7 @@ function ModelDetail({ tableName, onBack }) {
                                 : 'text-red-600'
                             }`}>
                               {parseFloat(trade.pnl_sum || 0) >= 0 ? '+' : ''}
-                              {parseFloat(trade.pnl_sum || 0).toFixed(2)}%
+                              ${parseFloat(trade.pnl_sum || 0).toFixed(2)}
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">

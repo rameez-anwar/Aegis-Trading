@@ -849,8 +849,8 @@ function ModelsList() {
                 <div className="w-16 h-16 bg-gradient-to-r from-pink-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg">
                   <BarChart3 className="w-8 h-8 text-white" />
                 </div>
-                <h3 className="text-sm font-semibold text-gray-900 mb-1">Model Optimization</h3>
-                <p className="text-xs text-gray-600">Identify and optimize profitable ML patterns</p>
+                <h3 className="text-sm font-semibold text-gray-900 mb-1">Model Monitoring</h3>
+                <p className="text-xs text-gray-600">Track signals, trades, and performance over time</p>
               </div>
             </div>
           </div>

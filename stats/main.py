@@ -98,6 +98,7 @@ def create_stats_schema_and_table(cursor, table_type="strategy"):
             win_rate_short_trades DECIMAL(10,4),
             avg_short_trade_duration DECIMAL(10,4),
             max_short_trade_return DECIMAL(10,4),
+
             min_short_trade_return DECIMAL(10,4),
             short_trades_percent DECIMAL(10,4),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -109,7 +110,6 @@ def create_stats_schema_and_table(cursor, table_type="strategy"):
         print(f"Error creating schema/table: {e}")
 
 def process_strategy_batch(strategy_tables_batch, engine):
-    """Process a batch of strategies and return results"""
     results = []
     
     for table_name in strategy_tables_batch:

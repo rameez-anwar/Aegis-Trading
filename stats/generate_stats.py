@@ -3,7 +3,6 @@ import numpy as np
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
-
 def calculate_returns(pnl_sum_series):
     """Calculate various return metrics from cumulative PnL sum"""
     if len(pnl_sum_series) == 0:
