@@ -1,0 +1,20 @@
+{
+  "model": "random_forest_model",
+  "params": {
+    "lookback": 66,
+    "n_estimators": 33,
+    "max_depth": 11,
+    "min_samples_split": 6,
+    "min_samples_leaf": 2,
+    "max_features": "log2",
+    "artifact_dir": "trainer\\sol\\4h\\random_forest"
+  },
+  "metrics": {
+    "mse": 7.626074657007311,
+    "rmse": 2.761534837188789,
+    "mae": 1.7499969227079606,
+    "r2": 0.9983888849345999,
+    "mape_percent": 1.6393377305839179,
+    "directional_accuracy_percent": 63.24543610547667
+  }
+}

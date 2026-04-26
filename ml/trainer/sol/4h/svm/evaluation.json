@@ -1,0 +1,18 @@
+{
+  "model": "svm_model",
+  "params": {
+    "lookback": 70,
+    "C": 3.1859396532851685,
+    "epsilon": 0.2648333303771273,
+    "kernel": "linear",
+    "artifact_dir": "trainer\\sol\\4h\\svm"
+  },
+  "metrics": {
+    "mse": 1507.3838920922465,
+    "rmse": 38.82504207457149,
+    "mae": 34.647840052673374,
+    "r2": 0.6813639480461866,
+    "mape_percent": 94.26907434256196,
+    "directional_accuracy_percent": 50.10652328294613
+  }
+}

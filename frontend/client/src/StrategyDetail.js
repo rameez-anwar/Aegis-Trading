@@ -508,20 +508,14 @@ function StrategyDetail({ strategyName, onBack }) {
                 )}
               </div>
             </div>
-            {/* Patterns Use */}
-            <div className="bg-gray-50 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Patterns Use</h4>
-              <div className="space-y-2 text-xs">
-                {Object.entries(strategy.parameters.patterns).map(([key, value]) => (
-                  <div key={key} className="flex justify-between">
-                    <span className="text-gray-600">{key.replace(/_/g, ' ')}</span>
-                    <span className="font-medium text-gray-900">{String(value)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
             {/* Dynamic Indicator Cards */}
-            {strategy.parameters.indicators && Object.entries(strategy.parameters.indicators).map(([category, indicators]) => (
+            {strategy.parameters.indicators && Object.entries(strategy.parameters.indicators)
+              .filter(([category]) => {
+                const normalized = String(category).toLowerCase().replace(/[_\s]/g, '');
+                // Hide these categories from the details page UI
+                return normalized !== 'overlapstudies' && normalized !== 'momentum';
+              })
+              .map(([category, indicators]) => (
               <div key={category} className="bg-gray-50 rounded-lg p-4">
                 <h4 className="font-semibold text-gray-900 mb-3 text-sm capitalize">
                   {category.replace(/([A-Z])/g, ' $1').trim()}
@@ -536,9 +530,9 @@ function StrategyDetail({ strategyName, onBack }) {
                 </div>
               </div>
             ))}
-            {/* Live */}
+            {/* TP/SL */}
             <div className="bg-gray-50 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Live</h4>
+              <h4 className="font-semibold text-gray-900 mb-3 text-sm">TP/SL</h4>
               <div className="space-y-2 text-xs">
                 {Object.entries(strategy.parameters.live).map(([key, value]) => {
                   // Format TP/SL values as percentages
