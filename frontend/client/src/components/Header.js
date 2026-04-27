@@ -7,12 +7,18 @@ const Header = ({ activePage = 'simulator' }) => {
   const { isAuthenticated, user, logout, openAuth } = useAuth() || {};
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const dropdownRef = useRef(null);
+  const desktopDropdownRef = useRef(null);
+  const mobileDropdownRef = useRef(null);
 
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+      const clickedInsideDesktop =
+        desktopDropdownRef.current && desktopDropdownRef.current.contains(event.target);
+      const clickedInsideMobile =
+        mobileDropdownRef.current && mobileDropdownRef.current.contains(event.target);
+
+      if (!clickedInsideDesktop && !clickedInsideMobile) {
         setMenuOpen(false);
       }
     };
@@ -73,7 +79,7 @@ const Header = ({ activePage = 'simulator' }) => {
             >
               <span>Models</span>
             </Link>
-            <div className="relative" ref={dropdownRef}>
+            <div className="relative" ref={desktopDropdownRef}>
               {!isAuthenticated ? (
                 <button
                   onClick={() => openAuth('login')}
@@ -136,7 +142,7 @@ const Header = ({ activePage = 'simulator' }) => {
 
           {/* Mobile: hamburger + account */}
           <div className="flex items-center gap-2 md:hidden">
-            <div className="relative" ref={dropdownRef}>
+            <div className="relative" ref={mobileDropdownRef}>
               {!isAuthenticated ? (
                 <button
                   onClick={() => openAuth('login')}
