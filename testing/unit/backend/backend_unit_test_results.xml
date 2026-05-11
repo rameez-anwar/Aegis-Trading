@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="jest tests" tests="7" failures="0" errors="0" time="0.756">
-  <testsuite name="Backend API unit tests" errors="0" failures="0" skipped="0" timestamp="2026-04-26T12:33:09" time="0.63" tests="3">
-    <testcase classname="Backend API unit tests GET / returns API metadata" name="Backend API unit tests GET / returns API metadata" time="0.029">
+<testsuites name="jest tests" tests="7" failures="0" errors="0" time="0.89">
+  <testsuite name="Backend API unit tests" errors="0" failures="0" skipped="0" timestamp="2026-04-27T05:44:16" time="0.715" tests="3">
+    <testcase classname="Backend API unit tests GET / returns API metadata" name="Backend API unit tests GET / returns API metadata" time="0.048">
     </testcase>
-    <testcase classname="Backend API unit tests GET /api/health returns OK when DB responds" name="Backend API unit tests GET /api/health returns OK when DB responds" time="0.008">
+    <testcase classname="Backend API unit tests GET /api/health returns OK when DB responds" name="Backend API unit tests GET /api/health returns OK when DB responds" time="0.011">
     </testcase>
-    <testcase classname="Backend API unit tests GET /api/health returns ERROR when DB fails" name="Backend API unit tests GET /api/health returns ERROR when DB fails" time="0.007">
+    <testcase classname="Backend API unit tests GET /api/health returns ERROR when DB fails" name="Backend API unit tests GET /api/health returns ERROR when DB fails" time="0.009">
     </testcase>
   </testsuite>
-  <testsuite name="normalizeTradingSymbol" errors="0" failures="0" skipped="0" timestamp="2026-04-26T12:33:09" time="0.044" tests="4">
+  <testsuite name="normalizeTradingSymbol" errors="0" failures="0" skipped="0" timestamp="2026-04-27T05:44:17" time="0.057" tests="4">
     <testcase classname="normalizeTradingSymbol adds USDT suffix when missing" name="normalizeTradingSymbol adds USDT suffix when missing" time="0.001">
     </testcase>
     <testcase classname="normalizeTradingSymbol keeps USDT suffix if present" name="normalizeTradingSymbol keeps USDT suffix if present" time="0.001">

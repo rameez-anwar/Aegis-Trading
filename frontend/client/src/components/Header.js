@@ -10,6 +10,15 @@ const Header = ({ activePage = 'simulator' }) => {
   const desktopDropdownRef = useRef(null);
   const mobileDropdownRef = useRef(null);
 
+  const displayName = (user?.name || '').toString().trim() || (user?.email || '').toString().trim() || 'User';
+
+  const firstName =
+    (displayName || '')
+      .toString()
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)[0] || 'User';
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -101,17 +110,16 @@ const Header = ({ activePage = 'simulator' }) => {
                   >
                     <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
                       <span className="text-white text-xs font-semibold">
-                        {(user?.name || user?.email || 'U').toString().slice(0,1).toUpperCase()}
+                        {(firstName || 'U').toString().slice(0, 1).toUpperCase()}
                       </span>
                     </div>
-                    <span className="hidden sm:block">{user?.name || 'User'}</span>
                     <ChevronDown className={`w-4 h-4 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
                   </button>
                   
                   {menuOpen && (
                     <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-50">
                       <div className="px-4 py-3 border-b border-gray-100">
-                        <p className="text-sm font-medium text-gray-900">{user?.name || 'User'}</p>
+                        <p className="text-sm font-medium text-gray-900">{displayName}</p>
                         <p className="text-xs text-gray-500">{user?.email}</p>
                       </div>
                       <div className="py-1">
@@ -164,7 +172,7 @@ const Header = ({ activePage = 'simulator' }) => {
                   >
                     <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
                       <span className="text-white text-xs font-semibold">
-                        {(user?.name || user?.email || 'U').toString().slice(0,1).toUpperCase()}
+                        {(firstName || 'U').toString().slice(0, 1).toUpperCase()}
                       </span>
                     </div>
                     <ChevronDown className={`w-4 h-4 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
@@ -173,7 +181,7 @@ const Header = ({ activePage = 'simulator' }) => {
                   {menuOpen && (
                     <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-50">
                       <div className="px-4 py-3 border-b border-gray-100">
-                        <p className="text-sm font-medium text-gray-900">{user?.name || 'User'}</p>
+                        <p className="text-sm font-medium text-gray-900">{displayName}</p>
                         <p className="text-xs text-gray-500">{user?.email}</p>
                       </div>
                       <div className="py-1">
