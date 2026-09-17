@@ -2,29 +2,13 @@
 
 **A Hybrid System for Cryptocurrency Signal Generation and Trade Execution Using AI and Technical Indicators**
 
-Final Year Project — an end-to-end platform that combines technical-indicator strategies with machine learning models to generate cryptocurrency trading signals, backtest performance, and execute trades on Bybit (demo).
+Final Year Project: an end-to-end platform that combines technical-indicator strategies with machine learning models to generate cryptocurrency trading signals, backtest performance, and execute trades on Bybit (demo).
 
 ---
 
 ## Overview
 
 Aegis Trading ingests market data from Binance and Bybit, builds signals from TA-Lib indicators and supervised ML predictors, evaluates strategies through backtesting and performance stats, and exposes everything through a React dashboard with optional live demo execution.
-
-```
-Market Data (Binance / Bybit)
-        ↓
-   PostgreSQL
-        ↓
-┌───────────────────┬────────────────────┐
-│ Technical         │ Machine Learning   │
-│ Indicators +      │ Models             │
-│ Strategy Pipeline │ (train → signals)  │
-└─────────┬─────────┴──────────┬─────────┘
-          ↓                    ↓
-     Backtest & Stats    Hybrid Execution
-          ↓                    ↓
-   Express API  ←→  React Dashboard
-```
 
 ---
 
