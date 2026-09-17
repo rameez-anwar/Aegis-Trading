@@ -16,7 +16,7 @@ engine = create_engine(f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{
 
 # --- Read main strategy config ---
 config_path = os.path.join(os.path.dirname(__file__), 'strategy_config.ini')
-config = configparser.ConfigParser()
+config = configparser.ConfigParser() 
 config.read(config_path)
 
 general = config['general']
